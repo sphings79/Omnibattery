@@ -104,6 +104,11 @@ from .const import (
     CONF_TARGET_GRID_POWER,
     DEFAULT_TARGET_GRID_POWER,
     CONF_NO_PD_MODE_ENABLED,
+    CONF_PRIMARY_BATTERY,
+    CONF_PRIMARY_FEEDFORWARD_ENABLED,
+    DEFAULT_PRIMARY_BATTERY,
+    DEFAULT_PRIMARY_FEEDFORWARD_ENABLED,
+    PRIMARY_FEEDFORWARD_TOLERANCE_W,
     CONF_NO_PD_COMMAND_DELAY,
     DEFAULT_NO_PD_MODE_ENABLED,
     DEFAULT_NO_PD_COMMAND_DELAY,
@@ -440,6 +445,114 @@ def _apply_driver_dynamic_limit(coordinator, current_limit: int) -> int:
     return max(0, int(dynamic))
 
 
+def _primary_coordinator(controller):
+    """The battery the user nominated to serve the house first, or None."""
+    name = (getattr(controller, "primary_battery", "") or "").strip()
+    if not name:
+        return None
+    for coordinator in getattr(controller, "coordinators", []):
+        if coordinator.name == name:
+            return coordinator
+    return None
+
+def _measured_house_load_w(controller, grid_w):
+    """Household load from the AC-bus balance, from measured battery output.
+
+    ``home = grid + sum(ac_power) + external_solar`` — the same derivation the
+    system sensor uses. Deliberately *measured* rather than commanded: a
+    battery regulated by something else (a Huawei released to its own energy
+    manager) contributes power this controller never asked for, and the
+    commanded figure would miss exactly that.
+
+    Returns None when no battery could be read, so a caller can tell "no
+    load" from "no idea".
+    """
+    if grid_w is None:
+        return None
+    total = float(grid_w)
+    seen = False
+    for coordinator in controller.coordinators:
+        if not getattr(coordinator, "is_available", False) or not coordinator.data:
+            continue
+        ac = coordinator.data.get("ac_power")
+        if ac is None:
+            battery_power = coordinator.data.get("battery_power")
+            ac = -battery_power if battery_power is not None else None
+        if ac is None:
+            continue
+        total += float(ac)
+        seen = True
+    if not seen:
+        return None
+    if controller.solar_production_sensor:
+        state = controller.hass.states.get(controller.solar_production_sensor)
+        if state is not None and state.state not in ("unknown", "unavailable", None):
+            try:
+                total += float(state.state)
+            except (TypeError, ValueError):
+                pass
+    return max(0.0, total)
+
+def _primary_feedforward_candidate_w(controller, grid_w) -> float:
+    """Discharge the primary battery should carry from the house load alone.
+
+    Feedback control can only act on an error that already exists. Where a
+    second regulator shares the meter it removes that error first, so the
+    primary battery is never asked for anything and the other one does all
+    the work. Handing the primary the house load directly makes it primary by
+    arriving first rather than by ranking first, and leaves the other
+    regulator as a fallback instead of switching it off.
+
+    Positive watts in the discharge direction; 0 when no primary is nominated or
+    that battery cannot serve right now. Computed regardless of the switch, so
+    the figure can be checked against the meter before committing to it —
+    :func:`_primary_feedforward_w` is what the control cycle acts on.
+    """
+    coordinator = _primary_coordinator(controller)
+    if coordinator is None:
+        return 0.0
+    house = _measured_house_load_w(controller, grid_w)
+    if not house or house <= 0:
+        return 0.0
+    limit = controller._battery_power_limit(coordinator, False)
+    if limit <= 0:
+        return 0.0
+    return float(min(house, limit))
+
+def _primary_feedforward_w(controller, grid_w) -> float:
+    """The feedforward the control cycle acts on: zero while the switch is off."""
+    if not getattr(controller, "primary_feedforward_enabled", False):
+        return 0.0
+    return _primary_feedforward_candidate_w(controller, grid_w)
+
+
+def _primary_feedforward_pending(controller, grid_w) -> bool:
+    """Whether the standing command falls short of the house load.
+
+    The deadband shortcut exists because a grid already on target needs no
+    correction. That reasoning does not hold here: the grid is on target
+    precisely *because* the other regulator is carrying the load, which is
+    the situation this feature exists to change.
+    """
+    feedforward = _primary_feedforward_w(controller, grid_w)
+    if feedforward <= 0:
+        return False
+    return controller.previous_power > -(feedforward - PRIMARY_FEEDFORWARD_TOLERANCE_W)
+
+def _apply_primary_feedforward(controller, new_power, grid_w):
+    """Floor the command at the house load, in the discharge direction."""
+    feedforward = _primary_feedforward_w(controller, grid_w)
+    if feedforward <= 0:
+        return new_power
+    if new_power > -feedforward:
+        _LOGGER.debug(
+            "Primary feedforward: raising %.1fW to %.1fW to cover the house load",
+            new_power, -feedforward,
+        )
+        return -feedforward
+    return new_power
+
+
 class ChargeDischargeController:
     """Controller to manage charge/discharge logic for all batteries."""
 
@@ -492,6 +605,12 @@ class ChargeDischargeController:
         # No-PD direct-tracking mode (opt-in): see _apply_no_pd_overrides. Overrides
         # are applied at the end of __init__, after the grid filter tau is set below.
         self.no_pd_mode_enabled = config_entry.data.get(CONF_NO_PD_MODE_ENABLED, DEFAULT_NO_PD_MODE_ENABLED)
+        # Which battery serves the house first, and whether it is handed the
+        # house load directly rather than waiting for a grid error.
+        self.primary_battery = config_entry.data.get(CONF_PRIMARY_BATTERY, DEFAULT_PRIMARY_BATTERY)
+        self.primary_feedforward_enabled = config_entry.data.get(
+            CONF_PRIMARY_FEEDFORWARD_ENABLED, DEFAULT_PRIMARY_FEEDFORWARD_ENABLED
+        )
         self._no_pd_command_delay = config_entry.data.get(CONF_NO_PD_COMMAND_DELAY, DEFAULT_NO_PD_COMMAND_DELAY)
         self._no_pd_debounce_unsub = None  # cancel handle for a pending debounced cycle
         self.enable_system_power_limits = config_entry.data.get(
@@ -1432,6 +1551,10 @@ class ChargeDischargeController:
         # No-PD direct-tracking: re-read flags and (re)apply/release the overrides.
         # Must run after the PD params above are reloaded so the override wins.
         self.no_pd_mode_enabled = self.config_entry.data.get(CONF_NO_PD_MODE_ENABLED, DEFAULT_NO_PD_MODE_ENABLED)
+        self.primary_battery = self.config_entry.data.get(CONF_PRIMARY_BATTERY, DEFAULT_PRIMARY_BATTERY)
+        self.primary_feedforward_enabled = self.config_entry.data.get(
+            CONF_PRIMARY_FEEDFORWARD_ENABLED, DEFAULT_PRIMARY_FEEDFORWARD_ENABLED
+        )
         self._no_pd_command_delay = self.config_entry.data.get(CONF_NO_PD_COMMAND_DELAY, DEFAULT_NO_PD_COMMAND_DELAY)
         self._apply_no_pd_overrides()
         self.max_contracted_power = self.config_entry.data.get(CONF_MAX_CONTRACTED_POWER, 7000)
@@ -6111,6 +6234,7 @@ class ChargeDischargeController:
             and not blocked_active_changed
             and not self._phase_safety_pending
             and abs(sensor_actual - active_target) < self.deadband
+            and not _primary_feedforward_pending(self, sensor_actual)
         ):
             if DEBUG_CONTROL_LOOP_DETAIL:
                 _LOGGER.debug(
@@ -6330,6 +6454,11 @@ class ChargeDischargeController:
             new_power = self._compute_pd_new_power(
                 error, sensor_elapsed_s, stale_safety_recalc
             )
+        # PRIMARY FEEDFORWARD: floor the command at the house load before any
+        # downstream blocker runs, so time slots, price and capacity limits still
+        # have the last word over it.
+        new_power = _apply_primary_feedforward(self, new_power, sensor_actual)
+
         # ZERO-CROSS HOLD: a charge<->discharge flip must survive the actuator
         # settle window before it becomes a real opposite-direction command (see
         # _apply_zero_cross_hold). Must run before _apply_min_power so a clamped

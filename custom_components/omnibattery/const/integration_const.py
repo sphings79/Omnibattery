@@ -494,6 +494,16 @@ CONF_TARGET_GRID_POWER = "pd_target_grid_power"
 # integral/derivative/smoothing curve. Reuses the deadband, min charge/discharge
 # power, relay min-ON and target-grid-power knobs above; adds only a command delay.
 CONF_NO_PD_MODE_ENABLED = "no_pd_mode_enabled"
+
+# Primary battery: which unit serves the house first, and whether it is given the
+# house load directly instead of waiting for a grid error to appear.
+CONF_PRIMARY_BATTERY = "primary_battery"
+DEFAULT_PRIMARY_BATTERY = ""
+CONF_PRIMARY_FEEDFORWARD_ENABLED = "primary_feedforward_enabled"
+DEFAULT_PRIMARY_FEEDFORWARD_ENABLED = False
+# How far the standing command may sit below the house load before the deadband
+# shortcut is skipped to raise it. Below this a correction is not worth a write.
+PRIMARY_FEEDFORWARD_TOLERANCE_W = 100
 CONF_NO_PD_COMMAND_DELAY = "no_pd_command_delay"
 CONF_ENABLE_SYSTEM_POWER_LIMITS = "enable_system_power_limits"
 CONF_SYSTEM_MAX_CHARGE_POWER = "system_max_charge_power"

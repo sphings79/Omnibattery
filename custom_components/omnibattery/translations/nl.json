@@ -1331,6 +1331,9 @@
       "no_pd_mode": {
         "name": "Directe Tracking zonder PD"
       },
+      "primary_feedforward": {
+        "name": "Huisverbruik vooruitsturen"
+      },
       "min_soc_floor_enabled": {
         "name": "Gegarandeerd Minimum SOC"
       },
@@ -1965,6 +1968,12 @@
           "friday": "Vrijdag",
           "saturday": "Zaterdag",
           "sunday": "Zondag"
+        }
+      },
+      "primary_battery": {
+        "name": "Primaire batterij",
+        "state": {
+          "automatic": "Automatisch (voorste eerst)"
         }
       },
       "pd_tuning_profile": {

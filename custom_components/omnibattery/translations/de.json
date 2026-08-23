@@ -1331,6 +1331,9 @@
       "no_pd_mode": {
         "name": "Direkte Nachführung ohne PD"
       },
+      "primary_feedforward": {
+        "name": "Hauslast vorsteuern"
+      },
       "min_soc_floor_enabled": {
         "name": "Garantierter Mindest-SOC"
       },
@@ -1965,6 +1968,12 @@
           "friday": "Freitag",
           "saturday": "Samstag",
           "sunday": "Sonntag"
+        }
+      },
+      "primary_battery": {
+        "name": "Primärbatterie",
+        "state": {
+          "automatic": "Automatisch (vollste zuerst)"
         }
       },
       "pd_tuning_profile": {

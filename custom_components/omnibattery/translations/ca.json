@@ -1331,6 +1331,9 @@
       "no_pd_mode": {
         "name": "Seguiment Directe sense PD"
       },
+      "primary_feedforward": {
+        "name": "Anticipar el consum de la casa"
+      },
       "min_soc_floor_enabled": {
         "name": "SOC Mínim Garantit"
       },
@@ -1965,6 +1968,12 @@
           "friday": "Divendres",
           "saturday": "Dissabte",
           "sunday": "Diumenge"
+        }
+      },
+      "primary_battery": {
+        "name": "Bateria principal",
+        "state": {
+          "automatic": "Automàtic (la més carregada primer)"
         }
       },
       "pd_tuning_profile": {

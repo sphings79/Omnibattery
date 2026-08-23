@@ -71,7 +71,13 @@ class PowerDistribution:
         available_batteries: list,
         is_charging: bool,
     ) -> list:
-        """Return batteries in the selector's normal SOC/energy priority order."""
+        """Return batteries in the selector's normal SOC/energy priority order.
+
+        A nominated primary battery sorts ahead of that for discharge, so it is
+        the one that serves the house while a single battery suffices. Charging
+        keeps the plain SOC order: filling the emptiest first is what brings the
+        two back level after the primary has carried the load.
+        """
         available_batteries = [
             coordinator for coordinator in available_batteries
             if not self._is_battery_manual_owned(coordinator)
@@ -81,6 +87,13 @@ class PowerDistribution:
             if is_charging
             else self._controller._active_discharge_batteries
         )
+
+        # Imported here rather than at module scope: this module is itself loaded
+        # lazily from the package, and a top-level import back into it would make
+        # that ordering load-bearing.
+        from .. import _primary_coordinator
+
+        primary = _primary_coordinator(self._controller)
 
         def sort_key(coordinator):
             soc = coordinator.data.get("battery_soc", 50) if coordinator.data else 50
@@ -100,7 +113,8 @@ class PowerDistribution:
                 if coordinator.data
                 else 0
             )
-            return (-effective_soc, energy - (2.5 if is_active else 0))
+            rank = 0 if coordinator is primary else 1
+            return (rank, -effective_soc, energy - (2.5 if is_active else 0))
 
         return sorted(available_batteries, key=sort_key)
 

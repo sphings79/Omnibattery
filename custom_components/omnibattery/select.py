@@ -13,6 +13,8 @@ from .const import (
     DOMAIN,
     CONF_BATTERY_PHASE,
     CONF_THREE_PHASE_ENABLED,
+    CONF_PRIMARY_BATTERY,
+    DEFAULT_PRIMARY_BATTERY,
     CONF_WEEKLY_FULL_CHARGE_DAY,
     DEFAULT_THREE_PHASE_ENABLED,
     PHASE_ASSIGNMENT_VALUES,
@@ -60,6 +62,10 @@ async def async_setup_entry(
 
     # Add PD tuning profile select (system-level, always available)
     entities.append(PdTuningProfileSelect(hass, entry))
+
+    # Which battery serves the house first. Only meaningful with more than one.
+    if len(entry.data.get("batteries", [])) > 1:
+        entities.append(PrimaryBatterySelect(hass, entry))
 
     async_add_entities(entities)
 
@@ -220,6 +226,72 @@ class WeeklyFullChargeDaySelect(SelectEntity):
         new_data[CONF_WEEKLY_FULL_CHARGE_DAY] = code
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
         _LOGGER.info("Weekly full charge day updated to %s (%s)", option, code)
+        self.async_write_ha_state()
+
+    @property
+    def device_info(self):
+        """Return device information for the system."""
+        return {
+            "identifiers": {(DOMAIN, "marstek_venus_system")},
+            "name": "Omnibattery System",
+            "manufacturer": "Omnibattery",
+            "model": "Multi-Battery System",
+        }
+
+
+class PrimaryBatterySelect(SelectEntity):
+    """Which battery serves the house first.
+
+    Discharge normally goes to the fullest battery. Nominating a primary puts
+    that one ahead of the ladder, and it is the battery the house-load
+    feedforward addresses when that switch is on.
+    """
+
+    _AUTOMATIC = "automatic"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the primary battery select."""
+        self.hass = hass
+        self.entry = entry
+
+        self._attr_has_entity_name = True
+        self._attr_translation_key = "primary_battery"
+        self._attr_unique_id = f"{SYSTEM_UNIQUE_ID_PREFIX}primary_battery"
+        self.entity_id = system_entity_id("select", "primary_battery")
+        self._attr_icon = "mdi:numeric-1-box-outline"
+        self._attr_should_poll = False
+
+    @property
+    def options(self) -> list[str]:
+        """Automatic, plus every configured battery by name."""
+        names = [
+            battery.get("name", "")
+            for battery in self.entry.data.get("batteries", [])
+            if battery.get("name")
+        ]
+        return [self._AUTOMATIC, *names]
+
+    @property
+    def current_option(self) -> str:
+        """Return the nominated battery, or automatic when none is set."""
+        name = self.entry.data.get(CONF_PRIMARY_BATTERY, DEFAULT_PRIMARY_BATTERY)
+        return name if name in self.options else self._AUTOMATIC
+
+    async def async_select_option(self, option: str) -> None:
+        """Persist the choice and hand it to the running controller."""
+        name = "" if option == self._AUTOMATIC else option
+        new_data = dict(self.entry.data)
+        new_data[CONF_PRIMARY_BATTERY] = name
+        self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+
+        # The running controller reads this per cycle; updating it here avoids
+        # waiting for a reload to take effect.
+        controller = (
+            self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {}).get("controller")
+        )
+        if controller is not None:
+            controller.primary_battery = name
+        _LOGGER.info("Primary battery set to %s", name or "automatic (highest SOC)")
         self.async_write_ha_state()
 
     @property

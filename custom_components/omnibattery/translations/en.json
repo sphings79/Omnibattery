@@ -1358,6 +1358,9 @@
       "no_pd_mode": {
         "name": "No-PD Direct Tracking"
       },
+      "primary_feedforward": {
+        "name": "Feed the house load forward"
+      },
       "min_soc_floor_enabled": {
         "name": "Guaranteed Minimum SOC"
       },
@@ -1982,6 +1985,12 @@
           "friday": "Friday",
           "saturday": "Saturday",
           "sunday": "Sunday"
+        }
+      },
+      "primary_battery": {
+        "name": "Primary battery",
+        "state": {
+          "automatic": "Automatic (highest charge first)"
         }
       },
       "pd_tuning_profile": {
