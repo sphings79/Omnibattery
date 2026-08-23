@@ -229,3 +229,20 @@ def test_both_new_entities_are_named_in_every_language():
         # The "automatic" option is a state, not a battery name, so it needs one.
         assert entity["select"]["primary_battery"]["state"]["automatic"], path
         assert entity["switch"]["primary_feedforward"]["name"], path
+
+
+def test_the_panel_offers_both_controls_in_every_language():
+    """A setting nobody can find is a setting nobody uses."""
+    import re
+
+    panel = open(
+        "custom_components/omnibattery/frontend/marstek-panel.js", encoding="utf-8"
+    ).read()
+
+    assert '{ key: "primary_battery", domain: "select"' in panel
+    assert '{ key: "primary_feedforward", domain: "switch"' in panel
+    # One label set and one help text per language block.
+    for key in ("secPrimary", "itemPrimaryBattery", "itemPrimaryFeedforward"):
+        assert len(re.findall(r"\b%s:" % key, panel)) == 6, key
+    for key in ("primary_battery", "primary_feedforward"):
+        assert len(re.findall(r"^    %s: \"" % key, panel, re.M)) == 6, key
