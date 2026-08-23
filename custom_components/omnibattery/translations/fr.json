@@ -1718,6 +1718,9 @@
       "inverter_software_version": {
         "name": "Micrologiciel de l'Onduleur"
       },
+      "grid_power": {
+        "name": "Puissance Réseau"
+      },
       "inverter_ac_power": {
         "name": "Puissance CA de l'Onduleur"
       },

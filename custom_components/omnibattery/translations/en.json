@@ -1715,6 +1715,9 @@
       "inverter_software_version": {
         "name": "Inverter Firmware"
       },
+      "grid_power": {
+        "name": "Grid Power"
+      },
       "inverter_ac_power": {
         "name": "Inverter AC Power"
       },

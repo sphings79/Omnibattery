@@ -1706,6 +1706,9 @@
       "inverter_software_version": {
         "name": "Omvormerfirmware"
       },
+      "grid_power": {
+        "name": "Netvermogen"
+      },
       "inverter_ac_power": {
         "name": "Omvormer AC-vermogen"
       },
