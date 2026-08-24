@@ -559,6 +559,46 @@ def _primary_feedforward_w(controller, grid_w) -> float:
     return _primary_feedforward_candidate_w(controller, grid_w)
 
 
+def _discharging_into_surplus(controller, new_power, grid_w) -> bool:
+    """Whether this command discharges while the roof has power to spare.
+
+    Discharging into a surplus is never right: the roof is already covering the
+    house, so the energy leaving the battery can only charge another battery or
+    go to the grid, and either way it has made a round trip for nothing.
+
+    The meter alone cannot tell — with a second regulator on it, one battery
+    charging and another discharging cancel out and the grid reads zero, which
+    the deadband then holds. Observed on the reference installation: 1391 W of
+    PV over a 529 W house, one battery taking in 1110 W while the other gave up
+    205 W, and the meter at 3 W.
+    """
+    if new_power >= 0:
+        return False
+    uncovered = _uncovered_load_w(controller, grid_w)
+    return uncovered is not None and uncovered < 0
+
+
+def _apply_surplus_guard(controller, new_power, grid_w):
+    """Refuse a discharge that the roof is already covering."""
+    if not _discharging_into_surplus(controller, new_power, grid_w):
+        return new_power
+    _LOGGER.info(
+        "Surplus guard: dropping %.0fW of discharge — PV covers the house with "
+        "%.0fW to spare",
+        abs(new_power), abs(_uncovered_load_w(controller, grid_w) or 0),
+    )
+    return 0
+
+
+def _surplus_guard_pending(controller, grid_w) -> bool:
+    """Whether a standing discharge needs withdrawing despite a quiet meter.
+
+    The deadband shortcut assumes a grid on target needs no action. It is on
+    target here only because two batteries are cancelling each other out.
+    """
+    return _discharging_into_surplus(controller, getattr(controller, "previous_power", 0), grid_w)
+
+
 def _primary_feedforward_pending(controller, grid_w) -> bool:
     """Whether the standing command falls short of the house load.
 
@@ -6268,6 +6308,7 @@ class ChargeDischargeController:
             and not self._phase_safety_pending
             and abs(sensor_actual - active_target) < self.deadband
             and not _primary_feedforward_pending(self, sensor_actual)
+            and not _surplus_guard_pending(self, sensor_actual)
         ):
             if DEBUG_CONTROL_LOOP_DETAIL:
                 _LOGGER.debug(
@@ -6491,6 +6532,10 @@ class ChargeDischargeController:
         # downstream blocker runs, so time slots, price and capacity limits still
         # have the last word over it.
         new_power = _apply_primary_feedforward(self, new_power, sensor_actual)
+
+        # SURPLUS GUARD: never discharge into PV the house is not using. Runs
+        # after the feedforward so it can also veto that.
+        new_power = _apply_surplus_guard(self, new_power, sensor_actual)
 
         # ZERO-CROSS HOLD: a charge<->discharge flip must survive the actuator
         # settle window before it becomes a real opposite-direction command (see

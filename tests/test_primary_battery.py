@@ -13,6 +13,8 @@ import pytest
 
 from custom_components.omnibattery import (
     _apply_primary_feedforward,
+    _apply_surplus_guard,
+    _surplus_guard_pending,
     _uncovered_load_w,
     _measured_house_load_w,
     _primary_coordinator,
@@ -314,3 +316,67 @@ def test_no_readable_battery_means_no_feedforward():
     controller = _solar_controller(0, [_battery("Marstek", available=False)])
     assert _uncovered_load_w(controller, 500.0) is None
     assert _primary_feedforward_w(controller, 500.0) == 0.0
+
+
+# ----------------------------------------------------------------------
+# never discharge into a surplus
+#
+# Independent of the feedforward, and the reason the reference installation
+# discharged one battery while the other charged: the PD loop controls on the
+# raw meter, and with a second regulator on it the two cancel out. The meter
+# reads zero, the deadband holds the standing command, and 829 W of surplus
+# takes a round trip through two conversion losses.
+# ----------------------------------------------------------------------
+def _surplus_case(enabled=False):
+    """1391 W of PV over a 529 W house; the other battery takes the surplus."""
+    return _solar_controller(1391, [
+        _battery("Marstek", battery_power=-205),   # discharging, commanded by us
+        _battery("Huawei", battery_power=1110),    # charging, commanded by nobody
+    ], enabled=enabled)
+
+
+def test_a_discharge_into_surplus_is_refused():
+    controller = _surplus_case()
+    assert _uncovered_load_w(controller, 3.0) < 0
+    assert _apply_surplus_guard(controller, -165, 3.0) == 0
+
+
+def test_charging_into_a_surplus_is_exactly_right():
+    """The guard is one-directional: absorbing surplus is the point."""
+    controller = _surplus_case()
+    assert _apply_surplus_guard(controller, 800, 3.0) == 800
+
+
+def test_the_quiet_meter_does_not_hide_the_standing_discharge():
+    """The grid reads zero only because the two batteries cancel out."""
+    controller = _surplus_case()
+    controller.previous_power = -165.0
+    assert _surplus_guard_pending(controller, 3.0) is True
+
+    # Once the discharge is withdrawn there is nothing left to correct.
+    controller.previous_power = 0.0
+    assert _surplus_guard_pending(controller, 3.0) is False
+
+
+def test_a_real_deficit_still_discharges():
+    """After dark the guard must keep out of the way."""
+    controller = _solar_controller(0, [
+        _battery("Marstek", ac_power=665),
+        _battery("Huawei", ac_power=44),
+    ])
+    assert _apply_surplus_guard(controller, -700, -40.0) == -700
+    controller.previous_power = -700.0
+    assert _surplus_guard_pending(controller, -40.0) is False
+
+
+def test_grid_charging_is_not_caught_by_the_guard():
+    """Charging from the grid at night is a decision, not an accident."""
+    controller = _solar_controller(0, [_battery("Marstek", ac_power=-1000)])
+    # Meter shows the house plus the charging; the guard only ever vetoes
+    # discharge, so a deliberate charge passes untouched.
+    assert _apply_surplus_guard(controller, 1000, 1600.0) == 1000
+
+
+def test_without_a_readable_battery_the_guard_stays_out():
+    controller = _solar_controller(2000, [_battery("Marstek", available=False)])
+    assert _apply_surplus_guard(controller, -500, -1500.0) == -500
