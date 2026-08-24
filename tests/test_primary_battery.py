@@ -380,3 +380,71 @@ def test_grid_charging_is_not_caught_by_the_guard():
 def test_without_a_readable_battery_the_guard_stays_out():
     controller = _solar_controller(2000, [_battery("Marstek", available=False)])
     assert _apply_surplus_guard(controller, -500, -1500.0) == -500
+
+
+# ----------------------------------------------------------------------
+# the guard must not follow the clouds
+#
+# A bare sign test toggles the battery in step with the light: PV wanders across
+# the house load, the uncovered figure crosses zero, and discharge starts and
+# stops every cycle. The guard engages only on a clear surplus and releases the
+# moment the load turns positive.
+# ----------------------------------------------------------------------
+def _drift(controller, series, grid_w=0.0):
+    """Walk a sequence of uncovered-load values past the guard."""
+    from custom_components.omnibattery import _surplus_blocks_discharge
+
+    verdicts = []
+    for uncovered in series:
+        # One battery, its own output the only thing between grid and house.
+        controller.coordinators = [_battery("Marstek", ac_power=uncovered - grid_w)]
+        verdicts.append(_surplus_blocks_discharge(controller, grid_w))
+    return verdicts
+
+
+def test_noise_around_zero_does_not_toggle_the_guard():
+    controller = _solar_controller(0, [], primary="Marstek")
+    controller.deadband = 40
+    controller._surplus_guard_latched = False
+    # Drifting between a small surplus and a small deficit: never clear enough.
+    assert _drift(controller, [-30, 20, -60, 40, -90, 10]) == [False] * 6
+
+
+def test_a_clear_surplus_engages_it_and_a_real_deficit_releases_it():
+    controller = _solar_controller(0, [], primary="Marstek")
+    controller.deadband = 40
+    controller._surplus_guard_latched = False
+    #        clear surplus        drifting back up          real deficit
+    series = [-800, -400, -120,   -60, -10, -30,            120, 300]
+    assert _drift(controller, series) == [
+        True, True, True,
+        True, True, True,     # inside the band the verdict is held
+        False, False,
+    ]
+
+
+def test_a_passing_cloud_hands_the_house_back_at_once():
+    """Release has no band: waiting would import while the battery sat idle."""
+    controller = _solar_controller(0, [], primary="Marstek")
+    controller.deadband = 40
+    controller._surplus_guard_latched = True
+    assert _drift(controller, [1])[0] is False
+
+
+def test_a_missing_reading_leaves_the_verdict_where_it_was():
+    from custom_components.omnibattery import _surplus_blocks_discharge
+
+    controller = _solar_controller(0, [_battery("Marstek", available=False)])
+    controller._surplus_guard_latched = True
+    assert _surplus_blocks_discharge(controller, 0.0) is True
+    controller._surplus_guard_latched = False
+    assert _surplus_blocks_discharge(controller, 0.0) is False
+
+
+def test_the_band_follows_the_configured_deadband():
+    """A user who widened the deadband widened their idea of meter noise."""
+    controller = _solar_controller(0, [], primary="Marstek")
+    controller.deadband = 500
+    controller._surplus_guard_latched = False
+    assert _drift(controller, [-300]) == [False]      # inside a wide deadband
+    assert _drift(controller, [-800]) == [True]

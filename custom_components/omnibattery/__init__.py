@@ -109,6 +109,7 @@ from .const import (
     DEFAULT_PRIMARY_BATTERY,
     DEFAULT_PRIMARY_FEEDFORWARD_ENABLED,
     PRIMARY_FEEDFORWARD_TOLERANCE_W,
+    SURPLUS_GUARD_HYSTERESIS_W,
     CONF_NO_PD_COMMAND_DELAY,
     DEFAULT_NO_PD_MODE_ENABLED,
     DEFAULT_NO_PD_COMMAND_DELAY,
@@ -559,8 +560,8 @@ def _primary_feedforward_w(controller, grid_w) -> float:
     return _primary_feedforward_candidate_w(controller, grid_w)
 
 
-def _discharging_into_surplus(controller, new_power, grid_w) -> bool:
-    """Whether this command discharges while the roof has power to spare.
+def _surplus_blocks_discharge(controller, grid_w) -> bool:
+    """Whether the roof has enough to spare that discharging would be waste.
 
     Discharging into a surplus is never right: the roof is already covering the
     house, so the energy leaving the battery can only charge another battery or
@@ -571,11 +572,33 @@ def _discharging_into_surplus(controller, new_power, grid_w) -> bool:
     the deadband then holds. Observed on the reference installation: 1391 W of
     PV over a 529 W house, one battery taking in 1110 W while the other gave up
     205 W, and the meter at 3 W.
+
+    Latching, with a band on the way in and none on the way out. A bare sign
+    test would chatter through every cloud edge, toggling the battery in step
+    with the light; the band means only a clear surplus engages it. Release is
+    immediate once the load turns positive, because by then the house genuinely
+    needs the battery and making it wait would import instead.
     """
+    uncovered = _uncovered_load_w(controller, grid_w)
+    latched = getattr(controller, "_surplus_guard_latched", False)
+    if uncovered is None:
+        # No reading is not evidence either way; the last verdict stands.
+        return latched
+    band = max(float(getattr(controller, "deadband", 0) or 0), SURPLUS_GUARD_HYSTERESIS_W)
+    if latched:
+        if uncovered > 0:
+            latched = False
+    elif uncovered < -band:
+        latched = True
+    controller._surplus_guard_latched = latched
+    return latched
+
+
+def _discharging_into_surplus(controller, new_power, grid_w) -> bool:
+    """Whether this command discharges while the roof has power to spare."""
     if new_power >= 0:
         return False
-    uncovered = _uncovered_load_w(controller, grid_w)
-    return uncovered is not None and uncovered < 0
+    return _surplus_blocks_discharge(controller, grid_w)
 
 
 def _apply_surplus_guard(controller, new_power, grid_w):
@@ -678,6 +701,9 @@ class ChargeDischargeController:
         # No-PD direct-tracking mode (opt-in): see _apply_no_pd_overrides. Overrides
         # are applied at the end of __init__, after the grid filter tau is set below.
         self.no_pd_mode_enabled = config_entry.data.get(CONF_NO_PD_MODE_ENABLED, DEFAULT_NO_PD_MODE_ENABLED)
+        # Latched while the roof covers the house, so a cloud edge cannot toggle
+        # the battery in step with the light.
+        self._surplus_guard_latched = False
         # Which battery serves the house first, and whether it is handed the
         # house load directly rather than waiting for a grid error.
         self.primary_battery = config_entry.data.get(CONF_PRIMARY_BATTERY, DEFAULT_PRIMARY_BATTERY)

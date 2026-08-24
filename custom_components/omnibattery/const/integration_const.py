@@ -504,6 +504,10 @@ DEFAULT_PRIMARY_FEEDFORWARD_ENABLED = False
 # How far the standing command may sit below the house load before the deadband
 # shortcut is skipped to raise it. Below this a correction is not worth a write.
 PRIMARY_FEEDFORWARD_TOLERANCE_W = 100
+# How clear a surplus has to be before the guard blocks discharge. Wider than
+# the meter noise, so a cloud edge does not toggle the battery every cycle; the
+# guard releases as soon as the load turns positive, which is a real deficit.
+SURPLUS_GUARD_HYSTERESIS_W = 100
 CONF_NO_PD_COMMAND_DELAY = "no_pd_command_delay"
 CONF_ENABLE_SYSTEM_POWER_LIMITS = "enable_system_power_limits"
 CONF_SYSTEM_MAX_CHARGE_POWER = "system_max_charge_power"
