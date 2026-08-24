@@ -1572,14 +1572,19 @@ class PrimaryFeedforwardSwitch(SwitchEntity):
             _measured_house_load_w,
             _primary_coordinator,
             _primary_feedforward_candidate_w,
+            _uncovered_load_w,
         )
 
         primary = _primary_coordinator(self.controller)
         grid_w = self.controller.previous_sensor
         house = _measured_house_load_w(self.controller, grid_w)
+        # The house figure is shown for orientation; the uncovered load is what
+        # the feedforward acts on, and under sun the two differ by the roof.
+        uncovered = _uncovered_load_w(self.controller, grid_w)
         return {
             "primary_battery": primary.name if primary else None,
             "house_load_w": round(house) if house is not None else None,
+            "uncovered_load_w": round(uncovered) if uncovered is not None else None,
             "feedforward_w": round(_primary_feedforward_candidate_w(self.controller, grid_w)),
         }
 

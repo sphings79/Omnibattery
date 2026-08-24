@@ -493,6 +493,39 @@ def _measured_house_load_w(controller, grid_w):
                 pass
     return max(0.0, total)
 
+def _uncovered_load_w(controller, grid_w):
+    """What the meter would read if every battery stopped, in watts.
+
+    This is the load the batteries actually have to cover: house consumption
+    less whatever PV is already supplying, arrived at without needing either
+    figure. ``grid + sum(ac_power)`` removes each battery's own contribution
+    from the meter reading, and what remains is the residual demand — negative
+    while PV more than covers the house.
+
+    The house load is the wrong quantity to feed forward. Under sun it is
+    covered by the roof, and commanding the primary battery to supply it anyway
+    discharges one battery into the other: observed on the reference
+    installation at 1188 W of PV against a 570 W house, with the primary
+    discharging 350 W while the other took in 920 W.
+    """
+    if grid_w is None:
+        return None
+    total = float(grid_w)
+    seen = False
+    for coordinator in getattr(controller, "coordinators", []):
+        if not getattr(coordinator, "is_available", False) or not coordinator.data:
+            continue
+        ac = coordinator.data.get("ac_power")
+        if ac is None:
+            battery_power = coordinator.data.get("battery_power")
+            ac = -battery_power if battery_power is not None else None
+        if ac is None:
+            continue
+        total += float(ac)
+        seen = True
+    return total if seen else None
+
+
 def _primary_feedforward_candidate_w(controller, grid_w) -> float:
     """Discharge the primary battery should carry from the house load alone.
 
@@ -511,13 +544,13 @@ def _primary_feedforward_candidate_w(controller, grid_w) -> float:
     coordinator = _primary_coordinator(controller)
     if coordinator is None:
         return 0.0
-    house = _measured_house_load_w(controller, grid_w)
-    if not house or house <= 0:
+    demand = _uncovered_load_w(controller, grid_w)
+    if demand is None or demand <= 0:
         return 0.0
     limit = controller._battery_power_limit(coordinator, False)
     if limit <= 0:
         return 0.0
-    return float(min(house, limit))
+    return float(min(demand, limit))
 
 def _primary_feedforward_w(controller, grid_w) -> float:
     """The feedforward the control cycle acts on: zero while the switch is off."""

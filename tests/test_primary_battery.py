@@ -13,6 +13,7 @@ import pytest
 
 from custom_components.omnibattery import (
     _apply_primary_feedforward,
+    _uncovered_load_w,
     _measured_house_load_w,
     _primary_coordinator,
     _primary_feedforward_candidate_w,
@@ -246,3 +247,70 @@ def test_the_panel_offers_both_controls_in_every_language():
         assert len(re.findall(r"\b%s:" % key, panel)) == 6, key
     for key in ("primary_battery", "primary_feedforward"):
         assert len(re.findall(r"^    %s: \"" % key, panel, re.M)) == 6, key
+
+
+# ----------------------------------------------------------------------
+# what the batteries actually have to cover
+#
+# The house load is the wrong thing to feed forward. Under sun the roof covers
+# it, and commanding the primary to supply it anyway discharges one battery into
+# the other. Observed on the reference installation: 1188 W of PV against a
+# 570 W house, the primary discharging 350 W while the other took in 920 W.
+# ----------------------------------------------------------------------
+def _solar_controller(pv_w, batteries, primary="Marstek", enabled=True, limit=2500):
+    """A controller whose solar sensor reports pv_w."""
+    controller = _controller(batteries, primary=primary, enabled=enabled, limit=limit)
+    controller.solar_production_sensor = "sensor.pv"
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(get=lambda _eid: SimpleNamespace(state=str(pv_w)))
+    )
+    return controller
+
+
+def test_pv_covering_the_house_leaves_the_primary_alone():
+    """The exact case that was wrong: sun to spare, and it still discharged."""
+    controller = _solar_controller(1188, [
+        _battery("Marstek", battery_power=-350),  # was discharging 350 W
+        _battery("Huawei", battery_power=920),    # while this one charged 920 W
+    ])
+    # Grid near zero: the roof is carrying the house and charging the other unit.
+    assert _uncovered_load_w(controller, 16.0) == pytest.approx(-554.0)
+    assert _primary_feedforward_w(controller, 16.0) == 0.0
+
+
+def test_only_the_shortfall_is_fed_forward():
+    """Half-covered by the roof means half from the battery, not all of it."""
+    controller = _solar_controller(400, [
+        _battery("Marstek", ac_power=0),
+        _battery("Huawei", ac_power=0),
+    ])
+    # House 1000 W, roof 400 W: the meter shows the 600 W nobody covers.
+    assert _uncovered_load_w(controller, 600.0) == 600.0
+    assert _primary_feedforward_w(controller, 600.0) == 600.0
+
+
+def test_another_battery_charging_is_not_a_load_to_cover():
+    """Its charging shows up at the meter, but the primary must not chase it."""
+    controller = _solar_controller(0, [
+        _battery("Marstek", ac_power=0),
+        _battery("Huawei", ac_power=-500),   # charging 500 W from the grid
+    ])
+    # Meter reads house 600 plus that 500. Only the 600 is the primary's job.
+    assert _uncovered_load_w(controller, 1100.0) == 600.0
+    assert _primary_feedforward_w(controller, 1100.0) == 600.0
+
+
+def test_after_dark_it_is_the_house_load_again():
+    """With no sun the two quantities coincide, which is the night case."""
+    controller = _solar_controller(0, [
+        _battery("Marstek", ac_power=665),
+        _battery("Huawei", ac_power=44),
+    ])
+    assert _uncovered_load_w(controller, -40.0) == 669.0
+    assert _primary_feedforward_w(controller, -40.0) == 669.0
+
+
+def test_no_readable_battery_means_no_feedforward():
+    controller = _solar_controller(0, [_battery("Marstek", available=False)])
+    assert _uncovered_load_w(controller, 500.0) is None
+    assert _primary_feedforward_w(controller, 500.0) == 0.0
