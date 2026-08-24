@@ -1985,6 +1985,12 @@
           "sunday": "Dimanche"
         }
       },
+      "charge_priority": {
+        "name": "Priorité de charge",
+        "state": {
+          "automatic": "Automatique (par heures de charge)"
+        }
+      },
       "primary_battery": {
         "name": "Batterie principale",
         "state": {

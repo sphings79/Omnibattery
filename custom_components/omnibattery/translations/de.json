@@ -1973,6 +1973,12 @@
           "sunday": "Sonntag"
         }
       },
+      "charge_priority": {
+        "name": "Ladereihenfolge",
+        "state": {
+          "automatic": "Automatisch (nach Ladedauer)"
+        }
+      },
       "primary_battery": {
         "name": "Primärbatterie",
         "state": {

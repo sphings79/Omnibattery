@@ -1973,6 +1973,12 @@
           "sunday": "Zondag"
         }
       },
+      "charge_priority": {
+        "name": "Laadvolgorde",
+        "state": {
+          "automatic": "Automatisch (op laaduren)"
+        }
+      },
       "primary_battery": {
         "name": "Primaire batterij",
         "state": {

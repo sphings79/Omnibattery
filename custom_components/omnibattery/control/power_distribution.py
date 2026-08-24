@@ -95,6 +95,13 @@ class PowerDistribution:
 
         primary = _primary_coordinator(self._controller)
 
+        if is_charging:
+            # Which battery has to start first, which is not the same question
+            # as who gets how many watts (see _allocation_weights).
+            from .. import _charge_order
+
+            return _charge_order(self._controller, available_batteries)
+
         def sort_key(coordinator):
             soc = coordinator.data.get("battery_soc", 50) if coordinator.data else 50
             is_active = coordinator in previous_active
@@ -119,7 +126,24 @@ class PowerDistribution:
         return sorted(available_batteries, key=sort_key)
 
     def _distribute_power_by_limits(self, total_power: float, available_batteries: list, is_charging: bool) -> dict:
-        """Distribute power among batteries proportionally to their individual limits.
+        """Distribute power among batteries.
+
+        Discharge shares out proportionally to each battery's limit. Charging
+        does not: it fills in order, giving each battery its full power before
+        moving on (see :func:`_charge_order`).
+
+        Sharing by power limit is the wrong shape for charging. Charge power
+        differs by an order of magnitude between an AC battery and a hybrid
+        inverter, so it hands the slow one the smaller share — while it is the
+        one that needs the most hours to finish. Observed: a 2.5 kW battery
+        offered 1053 W of a 4 kW surplus beside a 7 kW inverter taking 2947 W,
+        then still half empty at sunset while the other had been full since
+        early afternoon.
+
+        Sharing by *remaining energy* instead makes every battery finish at the
+        same moment whenever power allows, which is the earliest any of them
+        can be done. A battery that would need more than its limit is capped and
+        the excess redistributed, so nothing is left on the table either.
 
         Returns dict mapping coordinator -> power (int, rounded to 5W).
         """
@@ -146,18 +170,20 @@ class PowerDistribution:
             is_charging,
         )
 
+        weights = self._allocation_weights(available_batteries, limits, is_charging)
+
         allocation = {}
         remaining_batteries = list(available_batteries)
 
         # Iterative allocation: distribute proportionally, cap at limits, redistribute excess
         while remaining_power > 0 and remaining_batteries:
-            current_capacity = sum(limits[c] for c in remaining_batteries)
+            current_capacity = sum(weights[c] for c in remaining_batteries)
             if current_capacity <= 0:
                 break
 
             all_fit = True
             for c in list(remaining_batteries):
-                share = remaining_power * (limits[c] / current_capacity)
+                share = remaining_power * (weights[c] / current_capacity)
                 if share >= limits[c]:
                     # This battery is at its limit
                     allocation[c] = self._round_to_5w(limits[c])
@@ -168,7 +194,7 @@ class PowerDistribution:
             if all_fit:
                 # All remaining batteries can handle their proportional share
                 for c in remaining_batteries:
-                    share = remaining_power * (limits[c] / current_capacity)
+                    share = remaining_power * (weights[c] / current_capacity)
                     allocation[c] = self._round_to_5w(share)
                 break
 
@@ -196,6 +222,31 @@ class PowerDistribution:
             )
 
         return allocation
+
+    def _allocation_weights(self, batteries: list, limits: dict, is_charging: bool) -> dict:
+        """What each battery's share is measured against.
+
+        Discharging: its power limit, which is what it can contribute now.
+        Charging: how much room it has left, so the batteries finish together
+        rather than the fastest one finishing first and the slowest running out
+        of daylight. A battery whose remaining energy cannot be worked out falls
+        back to its limit, which is the previous behaviour.
+        """
+        if not is_charging:
+            return dict(limits)
+
+        from .. import _battery_remaining_kwh
+
+        weights = {}
+        for coordinator in batteries:
+            remaining = _battery_remaining_kwh(coordinator)
+            weights[coordinator] = (
+                remaining * 1000.0 if remaining is not None else limits.get(coordinator, 0)
+            )
+        # All full, or nothing known: fall back rather than divide by zero.
+        if sum(weights.values()) <= 0:
+            return dict(limits)
+        return weights
 
     def _select_batteries_for_operation(
         self,

@@ -104,11 +104,14 @@ from .const import (
     CONF_TARGET_GRID_POWER,
     DEFAULT_TARGET_GRID_POWER,
     CONF_NO_PD_MODE_ENABLED,
+    CONF_CHARGE_PRIORITY,
     CONF_PRIMARY_BATTERY,
+    DEFAULT_CHARGE_PRIORITY,
     CONF_PRIMARY_FEEDFORWARD_ENABLED,
     DEFAULT_PRIMARY_BATTERY,
     DEFAULT_PRIMARY_FEEDFORWARD_ENABLED,
     PRIMARY_FEEDFORWARD_TOLERANCE_W,
+    SCARCITY_HYSTERESIS_KWH,
     SURPLUS_GUARD_HYSTERESIS_W,
     CONF_NO_PD_COMMAND_DELAY,
     DEFAULT_NO_PD_MODE_ENABLED,
@@ -446,6 +449,83 @@ def _apply_driver_dynamic_limit(coordinator, current_limit: int) -> int:
     return max(0, int(dynamic))
 
 
+def _charge_outlook_kwh(controller):
+    """(expected surplus, what the batteries still want) for today, in kWh.
+
+    The surplus is what the forecast expects the roof to make from here on, less
+    what the house is expected to use in the same stretch. Both figures are ones
+    the integration already keeps: the forecast sensor it is configured with,
+    and the seven-day average of measured daily consumption. Returns None while
+    either is missing, which means "no opinion" rather than "scarce".
+    """
+    tracker = getattr(controller, "_consumption_tracker", None)
+    entity_id = getattr(controller, "solar_forecast_sensor", None)
+    if tracker is None or not entity_id:
+        return None
+    state = controller.hass.states.get(entity_id)
+    if state is None or state.state in ("unknown", "unavailable", None):
+        return None
+    try:
+        forecast_kwh = float(state.state)
+    except (TypeError, ValueError):
+        return None
+
+    wanted = 0.0
+    for coordinator in getattr(controller, "coordinators", []):
+        remaining = _battery_remaining_kwh(coordinator)
+        if remaining:
+            wanted += remaining
+    return forecast_kwh - tracker.get_avg_daily_consumption(), wanted
+
+
+def _scarce_solar_day(controller) -> bool:
+    """Whether today's sun is not expected to fill every battery.
+
+    Latched: a forecast wanders all day, and without a band the charge order
+    would follow it. Unknown outlook leaves the standing verdict alone.
+    """
+    outlook = _charge_outlook_kwh(controller)
+    scarce = getattr(controller, "_scarce_solar_latched", False)
+    if outlook is None:
+        return scarce
+    surplus, wanted = outlook
+    if scarce:
+        if surplus > wanted + SCARCITY_HYSTERESIS_KWH:
+            scarce = False
+    elif surplus < wanted - SCARCITY_HYSTERESIS_KWH:
+        scarce = True
+    controller._scarce_solar_latched = scarce
+    return scarce
+
+
+def _charge_order(controller, batteries) -> list:
+    """Batteries in the order they should be filled.
+
+    Ample sun: longest time to full first. That battery is the one at risk of
+    not finishing, and the others can catch up in the time it needs anyway.
+
+    Scarce sun: the DC-coupled one first, because the kilowatt-hours that do
+    arrive are worth putting where the least of them is lost to conversion.
+
+    A nominated battery overrides both.
+    """
+    named = (getattr(controller, "charge_priority", "") or "").strip()
+    scarce = _scarce_solar_day(controller)
+    active = getattr(controller, "_active_charge_batteries", None) or []
+
+    def sort_key(coordinator):
+        chosen = 0 if coordinator.name == named else 1
+        # A battery already charging keeps a small edge, so two of them with
+        # nearly equal claims do not trade places from one cycle to the next.
+        head_start = 1.1 if coordinator in active else 1.0
+        if scarce:
+            efficient = 0 if getattr(coordinator.driver, "dc_coupled", False) else 1
+            return (chosen, efficient, -(_battery_remaining_kwh(coordinator) or 0.0) * head_start)
+        return (chosen, -_time_to_full_h(controller, coordinator) * head_start)
+
+    return sorted(batteries, key=sort_key)
+
+
 def _primary_coordinator(controller):
     """The battery the user nominated to serve the house first, or None."""
     name = (getattr(controller, "primary_battery", "") or "").strip()
@@ -493,6 +573,37 @@ def _measured_house_load_w(controller, grid_w):
             except (TypeError, ValueError):
                 pass
     return max(0.0, total)
+
+def _battery_remaining_kwh(coordinator) -> Optional[float]:
+    """How much a battery still has room for, in kWh, or None if unknown."""
+    capacity = getattr(coordinator, "battery_capacity_kwh", 0) or 0
+    if capacity <= 0 and coordinator.data:
+        capacity = coordinator.data.get("battery_total_energy") or 0
+    if not capacity:
+        return None
+    soc = coordinator.data.get("battery_soc") if coordinator.data else None
+    if soc is None:
+        return None
+    ceiling = float(getattr(coordinator, "max_soc", 100) or 100)
+    return max(0.0, capacity * (ceiling - float(soc)) / 100.0)
+
+
+def _time_to_full_h(controller, coordinator) -> float:
+    """Hours of charging at full power before this battery is done.
+
+    The criterion that decides which battery has to start first. Charge power
+    differs by an order of magnitude between an AC battery and a hybrid
+    inverter, so the fuller-first ordering by state of charge says nothing about
+    who is at risk of not finishing before the sun goes.
+    """
+    remaining = _battery_remaining_kwh(coordinator)
+    if remaining is None:
+        return 0.0
+    limit = controller._battery_power_limit(coordinator, True)
+    if limit <= 0:
+        return 0.0
+    return remaining / (limit / 1000.0)
+
 
 def _grid_reading_w(controller):
     """The grid figure to report figures against, in watts, or None.
@@ -733,6 +844,10 @@ class ChargeDischargeController:
         # Latched while the roof covers the house, so a cloud edge cannot toggle
         # the battery in step with the light.
         self._surplus_guard_latched = False
+        # Whether today's forecast is expected to fill every battery. Latched so
+        # a wandering forecast cannot reshuffle the charge order.
+        self._scarce_solar_latched = False
+        self.charge_priority = config_entry.data.get(CONF_CHARGE_PRIORITY, DEFAULT_CHARGE_PRIORITY)
         # Which battery serves the house first, and whether it is handed the
         # house load directly rather than waiting for a grid error.
         self.primary_battery = config_entry.data.get(CONF_PRIMARY_BATTERY, DEFAULT_PRIMARY_BATTERY)
@@ -1680,6 +1795,7 @@ class ChargeDischargeController:
         # Must run after the PD params above are reloaded so the override wins.
         self.no_pd_mode_enabled = self.config_entry.data.get(CONF_NO_PD_MODE_ENABLED, DEFAULT_NO_PD_MODE_ENABLED)
         self.primary_battery = self.config_entry.data.get(CONF_PRIMARY_BATTERY, DEFAULT_PRIMARY_BATTERY)
+        self.charge_priority = self.config_entry.data.get(CONF_CHARGE_PRIORITY, DEFAULT_CHARGE_PRIORITY)
         self.primary_feedforward_enabled = self.config_entry.data.get(
             CONF_PRIMARY_FEEDFORWARD_ENABLED, DEFAULT_PRIMARY_FEEDFORWARD_ENABLED
         )

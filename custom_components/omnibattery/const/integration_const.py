@@ -508,6 +508,13 @@ PRIMARY_FEEDFORWARD_TOLERANCE_W = 100
 # the meter noise, so a cloud edge does not toggle the battery every cycle; the
 # guard releases as soon as the load turns positive, which is a real deficit.
 SURPLUS_GUARD_HYSTERESIS_W = 100
+
+# Which battery is filled first, and how the day's outlook decides it.
+CONF_CHARGE_PRIORITY = "charge_priority"
+DEFAULT_CHARGE_PRIORITY = ""
+# How far the outlook has to move before the scarce/ample verdict flips. A
+# forecast wanders all day; without this the order would follow it.
+SCARCITY_HYSTERESIS_KWH = 2.0
 CONF_NO_PD_COMMAND_DELAY = "no_pd_command_delay"
 CONF_ENABLE_SYSTEM_POWER_LIMITS = "enable_system_power_limits"
 CONF_SYSTEM_MAX_CHARGE_POWER = "system_max_charge_power"
