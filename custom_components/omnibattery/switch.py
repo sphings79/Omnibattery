@@ -1569,6 +1569,7 @@ class PrimaryFeedforwardSwitch(SwitchEntity):
         against the meter before committing to them.
         """
         from . import (
+            _grid_reading_w,
             _measured_house_load_w,
             _primary_coordinator,
             _primary_feedforward_candidate_w,
@@ -1576,7 +1577,7 @@ class PrimaryFeedforwardSwitch(SwitchEntity):
         )
 
         primary = _primary_coordinator(self.controller)
-        grid_w = self.controller.previous_sensor
+        grid_w = _grid_reading_w(self.controller)
         house = _measured_house_load_w(self.controller, grid_w)
         # The house figure is shown for orientation; the uncovered load is what
         # the feedforward acts on, and under sun the two differ by the roof.

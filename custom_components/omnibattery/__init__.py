@@ -494,6 +494,35 @@ def _measured_house_load_w(controller, grid_w):
                 pass
     return max(0.0, total)
 
+def _grid_reading_w(controller):
+    """The grid figure to report figures against, in watts, or None.
+
+    ``previous_sensor`` is the cycle's own reading, but it is cleared whenever
+    another manager takes the wheel — a max-SOC charge, for instance — and a
+    diagnostic that blanks out exactly when something interesting is happening
+    is no diagnostic. Falls back to reading the configured meter directly.
+    """
+    reading = getattr(controller, "previous_sensor", None)
+    if reading is not None:
+        return reading
+    entity_id = getattr(controller, "consumption_sensor", None) or (
+        getattr(controller, "config_entry", None)
+        and controller.config_entry.data.get("consumption_sensor")
+    )
+    if not entity_id:
+        return None
+    state = controller.hass.states.get(entity_id)
+    if state is None or state.state in ("unknown", "unavailable", None):
+        return None
+    try:
+        value = float(state.state)
+    except (TypeError, ValueError):
+        return None
+    if getattr(controller, "meter_inverted", False):
+        value = -value
+    return value
+
+
 def _uncovered_load_w(controller, grid_w):
     """What the meter would read if every battery stopped, in watts.
 

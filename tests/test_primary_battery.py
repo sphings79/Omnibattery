@@ -448,3 +448,52 @@ def test_the_band_follows_the_configured_deadband():
     controller._surplus_guard_latched = False
     assert _drift(controller, [-300]) == [False]      # inside a wide deadband
     assert _drift(controller, [-800]) == [True]
+
+
+def test_the_diagnostic_survives_a_cleared_cycle_reading():
+    """previous_sensor is dropped whenever another manager takes the wheel.
+
+    A max-SOC charge does exactly that, and a diagnostic that blanks out while
+    something interesting is happening is no diagnostic — it read null on the
+    reference installation at the very moment the surplus was being absorbed.
+    """
+    from custom_components.omnibattery import _grid_reading_w
+
+    controller = _controller([_battery("Marstek", ac_power=0)])
+    controller.consumption_sensor = "sensor.grid"
+    controller.meter_inverted = False
+    controller.previous_sensor = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(get=lambda _eid: SimpleNamespace(state="-66.5"))
+    )
+    assert _grid_reading_w(controller) == pytest.approx(-66.5)
+
+    # The cycle's own reading still wins when it has one.
+    controller.previous_sensor = 12.0
+    assert _grid_reading_w(controller) == 12.0
+
+
+def test_an_inverted_meter_is_honoured_by_the_diagnostic():
+    from custom_components.omnibattery import _grid_reading_w
+
+    controller = _controller([_battery("Marstek", ac_power=0)])
+    controller.consumption_sensor = "sensor.grid"
+    controller.meter_inverted = True
+    controller.previous_sensor = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(get=lambda _eid: SimpleNamespace(state="500"))
+    )
+    assert _grid_reading_w(controller) == -500.0
+
+
+def test_an_unavailable_meter_reports_nothing_rather_than_zero():
+    from custom_components.omnibattery import _grid_reading_w
+
+    controller = _controller([_battery("Marstek", ac_power=0)])
+    controller.consumption_sensor = "sensor.grid"
+    controller.meter_inverted = False
+    controller.previous_sensor = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(get=lambda _eid: SimpleNamespace(state="unavailable"))
+    )
+    assert _grid_reading_w(controller) is None
