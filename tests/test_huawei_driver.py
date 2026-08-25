@@ -1959,3 +1959,105 @@ def test_the_grid_sensor_is_named_in_every_language():
     ):
         entity = json.load(open(path, encoding="utf-8"))["entity"]["sensor"]
         assert entity["grid_power"]["name"], path
+
+
+# ----------------------------------------------------------------------
+# a held discharge keeps the strings dark
+#
+# The worst fault this driver has caused. A forcible discharge serves the house
+# from the battery and leaves the MPPT tracker down, so the roof produces
+# nothing — and the missing production then reads as a genuine deficit, which
+# asks for more discharge. The command goes on justifying itself.
+#
+# Measured on the reference installation: commanded at 04:32, still standing at
+# 09:22 through a cloudless sunrise. Strings at 374 V and 0.00 A; twelve seconds
+# after the registers were cleared, 11.4 A and 6675 W.
+# ----------------------------------------------------------------------
+def _lit_but_idle_blocks():
+    """Strings at open-circuit voltage, drawing nothing."""
+    return {**_LIVE_BLOCKS, 32016: [3741, 0, 3757, 0]}
+
+
+def _harvesting_blocks():
+    """The same strings one minute after the release: 374 V at 11.4 A."""
+    return {**_LIVE_BLOCKS, 32016: [3741, 1141, 3757, 1143]}
+
+
+@pytest.mark.asyncio
+async def test_lit_strings_drawing_nothing_are_recognised():
+    driver = _driver(_fake_client(_lit_but_idle_blocks()))
+    await driver.read_telemetry()
+    assert driver._pv_suppressed is True
+
+
+@pytest.mark.asyncio
+async def test_a_harvesting_string_is_not_mistaken_for_a_suppressed_one():
+    driver = _driver(_fake_client(_harvesting_blocks()))
+    await driver.read_telemetry()
+    assert driver._pv_suppressed is False
+
+
+@pytest.mark.asyncio
+async def test_darkness_is_not_suppression():
+    """At night the voltage collapses too, so a discharge stays allowed."""
+    driver = _driver(_fake_client({**_LIVE_BLOCKS, 32016: [0, 0, 0, 0]}))
+    await driver.read_telemetry()
+    assert driver._pv_suppressed is False
+
+
+@pytest.mark.asyncio
+async def test_a_discharge_is_released_rather_than_repeated():
+    hass = _hass_with_services()
+    driver = _driver(_fake_client(_lit_but_idle_blocks()), hass=hass)
+    await driver.read_telemetry()
+
+    result = await driver.apply_setpoint(-2000, read_back=False)
+    assert result.net_power_w == 0
+
+
+@pytest.mark.asyncio
+async def test_charging_is_never_vetoed_by_it():
+    """Charging is how the surplus gets used; it does not hold the tracker down."""
+    hass = _hass_with_services()
+    driver = _driver(_fake_client(_lit_but_idle_blocks()), hass=hass)
+    await driver.read_telemetry()
+    assert (await driver.apply_setpoint(2000, read_back=False)).net_power_w == 2000
+
+
+@pytest.mark.asyncio
+async def test_once_the_strings_carry_current_discharge_is_allowed_again():
+    """Self-correcting: the release lights the strings, the veto lifts."""
+    table = dict(_lit_but_idle_blocks())
+    client = _fake_client()
+    client.async_read_holding_block = AsyncMock(side_effect=lambda start, count: table.get(start))
+    driver = _driver(client, hass=_hass_with_services())
+    await driver.read_telemetry()
+    assert (await driver.apply_setpoint(-2000, read_back=False)).net_power_w == 0
+
+    table.update(_harvesting_blocks())
+    await driver.read_telemetry()
+    driver._last_write_monotonic = 0.0
+    assert (await driver.apply_setpoint(-2000, read_back=False)).net_power_w == -2000
+
+
+@pytest.mark.asyncio
+async def test_shutdown_releases_over_the_path_the_commands_took():
+    """Disabling the integration must clear the registers it wrote.
+
+    Releasing through the huawei_solar service while writing directly leaves the
+    command exactly where it was — there is no device to address, and the
+    failure is silent because shutdown suppresses the warning. That is why
+    switching Omnibattery off did not bring the sun back.
+    """
+    driver, client = _direct(device_id="")
+    assert await driver.standby() is True
+    assert _written(client)[0] == (47100, [0]), "the mode register must go first"
+    assert 47249 in {address for address, _values in _written(client)}
+
+
+@pytest.mark.asyncio
+async def test_the_service_path_still_releases_through_the_service():
+    hass = _hass_with_services()
+    driver = _driver(_fake_client(), hass=hass)
+    assert await driver.standby() is True
+    assert hass.services.async_call.await_args.args[1] == "stop_forcible_charge"

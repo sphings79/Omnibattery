@@ -182,10 +182,15 @@ charge cutoff on the inverter and the discharge cutoff on the battery, so
 resolving against the configured battery device alone finds one and misses the
 other. The driver searches the whole config entry.
 
-**Watchdog.** Every command carries a duration (10 minutes as issued). If Home
-Assistant dies without unloading, the inverter drops the command by itself and
-returns to its own regulation. This is why a duration is sent rather than an
-open-ended command.
+**Watchdog — do not rely on it.** Every command carries a duration (10 minutes
+as issued), and the register still reads 10 while a command stands. On the
+reference installation a forcible discharge written at 04:32 was still in force
+at 09:22, five hours later, with the integration disabled for the last of them.
+Whatever the duration governs, it did not release this. The release has to be
+written, and it has to go out over the same path the command did: releasing
+through the `huawei_solar` service while writing registers directly addresses a
+device that does not exist on that path, and the failure is silent because
+shutdown suppresses the warning.
 
 ## 6. Feature degradation matrix
 
@@ -214,7 +219,9 @@ misbehaving first and a test second:
 - The dynamic discharge limit ignores the battery's own contribution.
 - No read group may hold a single key.
 - The inverter's AC total is not published as the battery's AC port.
-- Every form schema survives the serialisation the frontend needs (§13.8).
+- Every form schema survives the serialisation the frontend needs (§13.9).
+- A discharge is released, not repeated, while the strings are lit but idle.
+- Shutdown clears the registers over the path the commands took.
 - An unpopulated pack slot produces no entities at all.
 - A battery device belonging to a different inverter is refused.
 - The limits form allows more than the battery reports today.
@@ -390,7 +397,29 @@ padding, so the pack 1 firmware string decodes to nothing, and the battery
 flapped in and out of the pool every three seconds all day. Groups are now one
 per cadence rather than one per block.
 
-### 13.8 A form schema must survive serialisation
+### 13.8 A held discharge keeps the strings dark
+
+The worst fault this driver has caused, and the one most specific to a hybrid.
+
+A forcible discharge serves the house from the battery, and the inverter then
+has no use for its strings: the MPPT tracker stays down. The panels sit at
+open-circuit voltage drawing nothing — 374 V at 0.00 A through a cloudless
+sunrise, against 375 V at 11.4 A twelve seconds after the registers were
+cleared.
+
+What makes it a trap rather than a nuisance is the feedback. With the roof
+producing nothing, the meter shows a real deficit, and a deficit is what asks
+for discharge. The command goes on justifying itself, and it survives sunrise:
+commanded at 04:32 against a genuinely dark sky, still standing at 09:22.
+
+The signal to act on comes from the strings themselves. Lit but unharvested is a
+state the inverter reports plainly and unambiguously — at night the voltage
+collapses too, and while the tracker runs there is current — so no forecast,
+sun elevation or clock is needed. A discharge asked for in that state is
+released instead of repeated, which lights the strings, which makes the next
+cycle decide on the truth.
+
+### 13.9 A form schema must survive serialisation
 
 Home Assistant hands the frontend a *serialised* copy of every form schema, and
 not every voluptuous construct has a serialised form. A `vol.Any` in the

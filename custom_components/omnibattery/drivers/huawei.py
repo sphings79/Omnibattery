@@ -81,6 +81,13 @@ _REG_CHARGE_CUTOFF = 47081             # u16, tenths of a percent
 _REG_DISCHARGE_CUTOFF = 47082          # u16, tenths of a percent
 _TARGET_MODE_TIME = 0
 
+# A string sitting at open-circuit voltage while drawing no current is lit but
+# unharvested: at night the voltage collapses too, and while the tracker runs
+# there is current. Measured on the reference installation during the fault:
+# 374 V at 0.00 A, against 375 V at 11.4 A one minute after the release.
+_PV_LIT_VOLTAGE_V = 100.0
+_PV_IDLE_CURRENT_A = 0.15
+
 # Slave ids worth trying when scanning. 1 is the factory default for a direct
 # connection; the rest are what dongles and energy managers hand out. Kept short
 # because each one costs a connection, and the inverter needs 1.5 s of silence
@@ -403,6 +410,8 @@ class HuaweiSolarDriver(BatteryDriver):
         # Which pack slots are populated, learned from the packs that answer.
         # Empty until one has, so a failed read never hides a pack that exists.
         self._packs: set[int] = set()
+        # Strings lit but not harvested — see read_telemetry.
+        self._pv_suppressed = False
         self._serial: Optional[str] = None
         # Last command actually written, so the deadband can compare against what
         # the hardware was told rather than against what it currently delivers.
@@ -643,6 +652,26 @@ class HuaweiSolarDriver(BatteryDriver):
         if storage is not None:
             self._storage_model = _STORAGE_MODELS.get(int(storage)) or self._storage_model
 
+        # Lit strings the inverter is not harvesting. On this hybrid a latched
+        # forcible discharge does exactly that: it serves the house from the
+        # battery and leaves the tracker down, so the roof produces nothing and
+        # the missing production then reads as a genuine deficit — the command
+        # goes on justifying itself. Observed from 04:32 until 09:22, through a
+        # cloudless sunrise, until the registers were cleared by hand.
+        lit_but_idle = False
+        for index in range(1, self._pv_strings + 1):
+            volts = snapshot.get(f"pv{index}_voltage")
+            amps = snapshot.get(f"pv{index}_current")
+            if volts is None or amps is None:
+                continue
+            if volts > _PV_LIT_VOLTAGE_V and abs(amps) < _PV_IDLE_CURRENT_A:
+                lit_but_idle = True
+        if any(
+            snapshot.get(f"pv{index}_voltage") is not None
+            for index in range(1, self._pv_strings + 1)
+        ):
+            self._pv_suppressed = lit_but_idle
+
         for index in (1, 2, 3):
             if snapshot.get(f"pack{index}_serial_number") or snapshot.get(
                 f"pack{index}_firmware_version"
@@ -735,6 +764,17 @@ class HuaweiSolarDriver(BatteryDriver):
             -self._ceiling("discharge"),
             min(self._ceiling("charge"), int(net_power_w)),
         )
+
+        if applied < 0 and self._pv_suppressed:
+            # Discharging is what put the tracker down; asking again would keep
+            # it there. Release instead and let the inverter light the strings —
+            # the next cycle sees real production and can decide on the truth.
+            _LOGGER.info(
+                "Huawei driver: releasing instead of discharging %dW — the "
+                "strings are lit but idle, which a held discharge causes",
+                abs(applied),
+            )
+            applied = 0
 
         if not self._should_write(applied):
             # Nothing was sent, so report what is actually in force rather than
@@ -1105,10 +1145,21 @@ class HuaweiSolarDriver(BatteryDriver):
         """Release the battery back to the inverter before shutting down.
 
         Unlike ``apply_setpoint(0)``, this is a real stop: leaving a forcible
-        command latched when Omnibattery goes away would freeze the battery at
-        whatever it was last told until the command's duration expires.
+        command latched when Omnibattery goes away freezes the battery at
+        whatever it was last told — and on this hybrid a latched discharge also
+        keeps the strings dark, so the installation loses its solar harvest
+        until someone clears the registers by hand.
+
+        Must take the same path the set-points took. Releasing through the
+        service while writing directly leaves the command exactly where it was:
+        the direct path needs no huawei_solar device, so there is none to
+        address, and the failure is silent because shutdown suppresses it.
         """
-        ok = await self._call_service("stop_forcible_charge", {})
+        if self._direct_write:
+            result = await self._write_setpoint_registers(0, read_back=False)
+            ok = result.ok
+        else:
+            ok = await self._call_service("stop_forcible_charge", {})
         if ok:
             self._last_written_w = None
             self._last_write_monotonic = 0.0
