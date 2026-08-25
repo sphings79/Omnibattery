@@ -84,15 +84,28 @@ def test_export_does_not_produce_a_negative_house():
 # ----------------------------------------------------------------------
 # nominating the primary
 # ----------------------------------------------------------------------
-def test_no_primary_nominated_means_the_feature_is_inert():
-    controller = _controller([_battery("Marstek", ac_power=800)], primary="")
-    assert _primary_coordinator(controller) is None
-    assert _primary_feedforward_w(controller, 0.0) == 0.0
+def test_without_a_nomination_the_ordinary_choice_is_used():
+    """Switching the feedforward on alone changes when a battery is asked,
+    not which one — it addresses the battery the discharge ordering would have
+    picked anyway, the fullest."""
+    fuller = _battery("Marstek", ac_power=0, soc=70)
+    emptier = _battery("Huawei", battery_power=-800, soc=30)
+    controller = _controller([emptier, fuller], primary="")
+    assert _primary_coordinator(controller) is fuller
+    assert _primary_feedforward_w(controller, 0.0) == 800.0
 
 
-def test_a_name_that_matches_nothing_is_not_guessed_at():
-    controller = _controller([_battery("Marstek", ac_power=800)], primary="Venus 9")
+def test_a_name_that_no_longer_matches_falls_back_rather_than_stopping():
+    """A battery can be renamed or removed; the feature should not go quiet."""
+    fuller = _battery("Marstek", ac_power=0, soc=70)
+    controller = _controller([fuller], primary="Venus 9")
+    assert _primary_coordinator(controller) is fuller
+
+
+def test_a_fleet_that_cannot_discharge_has_no_primary():
+    controller = _controller([_battery("Marstek", ac_power=0)], primary="", limit=0)
     assert _primary_coordinator(controller) is None
+    assert _primary_feedforward_w(controller, 500.0) == 0.0
 
 
 def test_the_switch_gates_the_command_but_not_the_reading():

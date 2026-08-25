@@ -504,33 +504,95 @@ def _apply_driver_dynamic_limit(coordinator, current_limit: int) -> int:
     return max(0, int(dynamic))
 
 
-def _charge_outlook_kwh(controller):
-    """(expected surplus, what the batteries still want) for today, in kWh.
+def _solar_forecast_kwh(controller):
+    """Today's forecast in kWh, or None, honouring the sensor's own unit.
 
-    The surplus is what the forecast expects the roof to make from here on, less
-    what the house is expected to use in the same stretch. Both figures are ones
-    the integration already keeps: the forecast sensor it is configured with,
-    and the seven-day average of measured daily consumption. Returns None while
-    either is missing, which means "no opinion" rather than "scarce".
+    The setup accepts a forecast reported in either kWh or Wh — it validates
+    exactly those two — so the raw state cannot be read as kWh and left at that.
+    A Wh sensor taken for kWh overstates the day by a factor of a thousand,
+    which here would call every day ample and put the efficient battery last.
     """
-    tracker = getattr(controller, "_consumption_tracker", None)
     entity_id = getattr(controller, "solar_forecast_sensor", None)
-    if tracker is None or not entity_id:
+    if not entity_id:
         return None
     state = controller.hass.states.get(entity_id)
     if state is None or state.state in ("unknown", "unavailable", None):
         return None
     try:
-        forecast_kwh = float(state.state)
+        value = float(state.state)
     except (TypeError, ValueError):
         return None
+    unit = (state.attributes or {}).get("unit_of_measurement", "")
+    return value / 1000.0 if unit == "Wh" else value
+
+
+def _charge_outlook_kwh(controller):
+    """(surplus still expected today, what the batteries still want), in kWh.
+
+    Both sides have to describe the same stretch of day. The forecast sensor
+    reports the whole day and the consumption average likewise, so comparing
+    them raw answers a question about this morning at six in the evening — by
+    which time most of that solar is already on the roof and behind us.
+
+    So both are cut down to what is left, the way the charge-delay manager
+    already does it: solar by what has actually been produced so far, or failing
+    that by the fraction of the production window elapsed; consumption by the
+    part of its measurement window that still lies ahead.
+
+    Returns None while any input is missing, which means "no opinion" rather
+    than "scarce".
+    """
+    tracker = getattr(controller, "_consumption_tracker", None)
+    forecast_today = _solar_forecast_kwh(controller)
+    if tracker is None or forecast_today is None:
+        return None
+
+    now = dt_util.now()
+    now_h = now.hour + now.minute / 60.0
+    t_end = None
+    estimate_t_end = getattr(tracker, "estimate_t_end", None)
+    if callable(estimate_t_end):
+        try:
+            t_end = estimate_t_end()
+        except Exception:  # noqa: BLE001
+            t_end = None
+
+    produced = getattr(controller, "_daily_solar_energy_kwh", 0.0) or 0.0
+    if produced > 0:
+        # What the roof has actually made beats any curve fitted to the clock.
+        remaining_solar = max(0.0, forecast_today - produced)
+    else:
+        fraction_done = 0.0
+        get_fraction = getattr(tracker, "get_solar_fraction_done", None)
+        if callable(get_fraction) and t_end is not None:
+            try:
+                fraction_done = float(
+                    get_fraction(now_h, getattr(controller, "_solar_t_start", None), t_end)
+                )
+            except Exception:  # noqa: BLE001
+                fraction_done = 0.0
+        remaining_solar = forecast_today * max(0.0, min(1.0, 1.0 - fraction_done))
+
+    avg_daily = tracker.get_avg_daily_consumption()
+    remaining_consumption = avg_daily
+    window_per_day = None
+    get_window = getattr(tracker, "get_consumption_window_hours_per_day", None)
+    hours_in_range = getattr(tracker, "consumption_window_hours_in_range", None)
+    if callable(get_window) and callable(hours_in_range) and t_end is not None:
+        try:
+            window_per_day = float(get_window())
+            if window_per_day > 0:
+                ahead = float(hours_in_range(now_h, t_end))
+                remaining_consumption = avg_daily * max(0.0, ahead) / window_per_day
+        except Exception:  # noqa: BLE001
+            remaining_consumption = avg_daily
 
     wanted = 0.0
     for coordinator in getattr(controller, "coordinators", []):
         remaining = _battery_remaining_kwh(coordinator)
         if remaining:
             wanted += remaining
-    return forecast_kwh - tracker.get_avg_daily_consumption(), wanted
+    return remaining_solar - remaining_consumption, wanted
 
 
 def _scarce_solar_day(controller) -> bool:
@@ -582,14 +644,29 @@ def _charge_order(controller, batteries) -> list:
 
 
 def _primary_coordinator(controller):
-    """The battery the user nominated to serve the house first, or None."""
+    """The battery that serves the house first, nominated or chosen.
+
+    Left on automatic — or naming a battery that is no longer configured — the
+    feedforward addresses whichever battery the ordinary discharge ordering
+    would have picked anyway: the fullest one. That is the same answer the rest
+    of the system gives, so switching the feedforward on without nominating
+    anything changes when a battery is asked, not which.
+
+    Returns None only when no battery can serve at all.
+    """
     name = (getattr(controller, "primary_battery", "") or "").strip()
-    if not name:
+    batteries = list(getattr(controller, "coordinators", []))
+    if name:
+        for coordinator in batteries:
+            if coordinator.name == name:
+                return coordinator
+    able = [
+        coordinator for coordinator in batteries
+        if controller._battery_power_limit(coordinator, False) > 0
+    ]
+    if not able:
         return None
-    for coordinator in getattr(controller, "coordinators", []):
-        if coordinator.name == name:
-            return coordinator
-    return None
+    return max(able, key=lambda c: (c.data or {}).get("battery_soc", 0) or 0)
 
 def _measured_house_load_w(controller, grid_w):
     """Household load from the AC-bus balance, from measured battery output.

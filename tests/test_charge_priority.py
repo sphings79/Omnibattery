@@ -9,6 +9,7 @@ the grid.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -39,18 +40,44 @@ def _battery(name, **kwargs):
     return _Battery(name, **kwargs)
 
 
-def _controller(batteries, *, forecast=None, avg_consumption=20.0, priority=""):
+def _controller(
+    batteries, *, forecast=None, avg_consumption=20.0, priority="",
+    unit="kWh", produced_kwh=0.0, t_end=20.0, window_per_day=24.0,
+    hours_ahead=None,
+):
+    """A controller stub carrying the pieces the outlook reads.
+
+    ``hours_ahead`` is what the tracker reports as consumption-window hours
+    still to come; left None it is derived from the clock, which is what makes
+    the horizon tests sensitive to the time of day.
+    """
+    def _hours_in_range(now_h, end_h):
+        if hours_ahead is not None:
+            return hours_ahead
+        return max(0.0, end_h - now_h)
+
     return SimpleNamespace(
         coordinators=batteries,
         charge_priority=priority,
         _scarce_solar_latched=False,
         _active_charge_batteries=[],
+        _daily_solar_energy_kwh=produced_kwh,
+        _solar_t_start=8.0,
         solar_forecast_sensor="sensor.forecast" if forecast is not None else None,
         _consumption_tracker=SimpleNamespace(
-            get_avg_daily_consumption=lambda: avg_consumption
+            get_avg_daily_consumption=lambda: avg_consumption,
+            estimate_t_end=lambda: t_end,
+            get_solar_fraction_done=lambda now_h, t_start, end_h: (
+                0.0 if end_h <= (t_start or 0.0)
+                else max(0.0, min(1.0, (now_h - (t_start or 0.0)) / (end_h - (t_start or 0.0))))
+            ),
+            get_consumption_window_hours_per_day=lambda: window_per_day,
+            consumption_window_hours_in_range=_hours_in_range,
         ),
         hass=SimpleNamespace(states=SimpleNamespace(
-            get=lambda _eid: SimpleNamespace(state=str(forecast))
+            get=lambda _eid: SimpleNamespace(
+                state=str(forecast), attributes={"unit_of_measurement": unit}
+            )
             if forecast is not None else None
         )),
         _battery_power_limit=lambda coordinator, is_charging: coordinator._limit_w,
@@ -102,7 +129,12 @@ def test_with_sun_to_spare_the_slow_battery_goes_first():
         _battery("Marstek", capacity=15.36, soc=20, limit_w=2500),
         _battery("Huawei", capacity=13.8, soc=20, limit_w=7000, dc_coupled=True),
     ]
-    controller = _controller(batteries, forecast=60.0, avg_consumption=20.0)
+    # Pinned rather than clock-derived: 60 kWh forecast with none produced yet
+    # and the whole consumption window still ahead.
+    controller = _controller(
+        batteries, forecast=60.0, avg_consumption=20.0,
+        produced_kwh=0.01, hours_ahead=24.0,
+    )
     assert [c.name for c in _charge_order(controller, batteries)] == ["Marstek", "Huawei"]
 
 
@@ -128,18 +160,25 @@ def test_a_wandering_forecast_does_not_reshuffle_the_order():
         _battery("Marstek", capacity=10.0, soc=0, limit_w=2500),
         _battery("Huawei", capacity=10.0, soc=0, limit_w=7000, dc_coupled=True),
     ]
-    controller = _controller(batteries, forecast=41.0, avg_consumption=20.0)
+    controller = _controller(
+        batteries, forecast=41.0, avg_consumption=20.0,
+        produced_kwh=0.01, hours_ahead=24.0,
+    )
+
+    def _forecast(value):
+        return lambda _eid: SimpleNamespace(
+            state=str(value), attributes={"unit_of_measurement": "kWh"}
+        )
+
     # Wants 20 kWh, expects 21: ample, but only just.
     assert _scarce_solar_day(controller) is False
 
     for forecast in (40.5, 39.5, 40.0, 39.0):
-        controller.hass.states.get = (
-            lambda _eid, value=forecast: SimpleNamespace(state=str(value))
-        )
+        controller.hass.states.get = _forecast(forecast)
         assert _scarce_solar_day(controller) is False, forecast
 
     # Clearly short of the need, by more than the band: now it flips.
-    controller.hass.states.get = lambda _eid: SimpleNamespace(state="30.0")
+    controller.hass.states.get = _forecast(30.0)
     assert _scarce_solar_day(controller) is True
 
 
@@ -277,3 +316,103 @@ def test_the_head_battery_reaches_its_own_rating():
     ]
     assert _split(batteries, 2500)["Marstek"] == 2420    # the old, capped figure
     assert _split(batteries, 6828)["Marstek"] == 2500    # the whole surplus
+
+
+# ----------------------------------------------------------------------
+# the forecast: unit, and which stretch of day it describes
+#
+# The setup validates a forecast sensor reporting kWh *or* Wh, and the raw
+# state cannot be read as kWh and left at that. Both figures also have to
+# describe the same stretch of day: comparing a whole-day forecast against a
+# whole-day consumption average answers a question about this morning when it
+# is asked at six in the evening.
+# ----------------------------------------------------------------------
+def _outlook(**kwargs):
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    batteries = [
+        _battery("Marstek", capacity=10.0, soc=0, limit_w=2500),
+        _battery("Huawei", capacity=10.0, soc=0, limit_w=7000, dc_coupled=True),
+    ]
+    return _charge_outlook_kwh(_controller(batteries, **kwargs))
+
+
+def test_a_forecast_in_watt_hours_is_not_taken_for_kilowatt_hours():
+    """A thousandfold error, and it would call every day ample."""
+    surplus_kwh, wanted = _outlook(
+        forecast=30.0, unit="kWh", avg_consumption=20.0,
+        produced_kwh=0.01, hours_ahead=24.0,
+    )
+    surplus_wh, _ = _outlook(
+        forecast=30000.0, unit="Wh", avg_consumption=20.0,
+        produced_kwh=0.01, hours_ahead=24.0,
+    )
+    assert surplus_kwh == pytest.approx(surplus_wh)
+    assert wanted == pytest.approx(20.0)
+
+
+def test_a_sensor_without_a_unit_is_read_as_kilowatt_hours():
+    """What the documented configuration asks for, and the older readers assume."""
+    surplus, _ = _outlook(
+        forecast=30.0, unit="", avg_consumption=20.0,
+        produced_kwh=0.01, hours_ahead=24.0,
+    )
+    assert surplus == pytest.approx(9.99, abs=0.02)
+
+
+def test_production_already_on_the_roof_is_taken_off_the_forecast():
+    """Measured beats any curve fitted to the clock."""
+    morning, _ = _outlook(
+        forecast=30.0, avg_consumption=20.0, produced_kwh=0.01, hours_ahead=24.0,
+    )
+    afternoon, _ = _outlook(
+        forecast=30.0, avg_consumption=20.0, produced_kwh=25.0, hours_ahead=6.0,
+    )
+    assert morning == pytest.approx(9.99, abs=0.02)
+    # 5 kWh of sun left against 5 kWh of consumption still ahead.
+    assert afternoon == pytest.approx(0.0, abs=0.02)
+    assert afternoon < morning
+
+
+def test_the_same_forecast_says_less_as_the_day_goes_on(monkeypatch):
+    """Without production figures the elapsed part of the window stands in."""
+    from custom_components.omnibattery import _charge_outlook_kwh
+    import custom_components.omnibattery as mod
+
+    def at(hour):
+        monkeypatch.setattr(
+            mod.dt_util, "now",
+            lambda: datetime(2026, 8, 25, hour, 0, tzinfo=timezone.utc),
+        )
+        batteries = [_battery("Marstek", capacity=10.0, soc=0, limit_w=2500)]
+        # Production window 08:00–20:00, consumption window the whole day.
+        return _charge_outlook_kwh(_controller(
+            batteries, forecast=30.0, avg_consumption=12.0, t_end=20.0,
+        ))[0]
+
+    at_eight, at_two, at_seven = at(8), at(14), at(19)
+    assert at_eight > at_two > at_seven
+
+    # At 08:00 the whole 30 kWh is still ahead, and only the twelve hours of
+    # consumption up to sunset count against it — 6 of the 12 kWh daily average.
+    # What the house uses after dark cannot be covered by today's sun either way.
+    assert at_eight == pytest.approx(24.0, abs=0.5)
+    # Half the production window gone: 15 kWh left against 3 kWh still to use.
+    assert at_two == pytest.approx(12.0, abs=0.5)
+    # An hour before sunset there is almost nothing left to plan with.
+    assert at_seven < 4.0
+
+
+def test_no_forecast_sensor_yields_no_opinion():
+    assert _outlook(forecast=None) is None
+
+
+def test_an_unreadable_forecast_yields_no_opinion():
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    controller = _controller([_battery("A", capacity=10.0, soc=0, limit_w=1000)],
+                             forecast=30.0)
+    controller.hass.states.get = lambda _eid: SimpleNamespace(
+        state="unavailable", attributes={}
+    )
+    assert _charge_outlook_kwh(controller) is None
