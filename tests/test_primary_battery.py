@@ -589,3 +589,21 @@ def test_a_battery_that_cannot_charge_adds_no_room():
         0 if coordinator.name == "Marstek" else 3000
     )
     assert feedforward(controller, 67.0) == 3000.0
+
+
+def test_the_diagnostics_refresh_themselves():
+    """Their figures live on the controller and change every cycle.
+
+    Unpolled, an entity's attributes freeze at the last state write — for a
+    switch that is the moment someone toggled it. Observed reporting a 3647 W
+    surplus at dusk with 68 W of sun, four hours after it was switched on.
+    """
+    import inspect
+
+    from custom_components.omnibattery.select import ChargePrioritySelect
+    from custom_components.omnibattery.switch import PrimaryFeedforwardSwitch
+
+    for cls in (PrimaryFeedforwardSwitch, ChargePrioritySelect):
+        source = inspect.getsource(cls.__init__)
+        assert "_attr_should_poll = True" in source, cls.__name__
+        assert "extra_state_attributes" in inspect.getsource(cls), cls.__name__

@@ -328,7 +328,9 @@ class ChargePrioritySelect(SelectEntity):
         self._attr_unique_id = f"{SYSTEM_UNIQUE_ID_PREFIX}charge_priority"
         self.entity_id = system_entity_id("select", "charge_priority")
         self._attr_icon = "mdi:battery-arrow-up"
-        self._attr_should_poll = False
+        # The order and the hours-to-full it reports are recomputed every cycle;
+        # unpolled they would freeze at the moment the selection last changed.
+        self._attr_should_poll = True
 
     @property
     def options(self) -> list[str]:

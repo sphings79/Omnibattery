@@ -1554,7 +1554,11 @@ class PrimaryFeedforwardSwitch(SwitchEntity):
         self._attr_unique_id = f"{SYSTEM_UNIQUE_ID_PREFIX}primary_feedforward"
         self.entity_id = system_entity_id("switch", "primary_feedforward")
         self._attr_icon = "mdi:arrow-right-bold-outline"
-        self._attr_should_poll = False
+        # The figures below live on the controller and change every cycle. Left
+        # unpolled, the attributes freeze at whatever they were when the switch
+        # was last written — which is when someone toggled it. A diagnostic
+        # showing a surplus from four hours ago is worse than none.
+        self._attr_should_poll = True
 
     @property
     def is_on(self) -> bool:
