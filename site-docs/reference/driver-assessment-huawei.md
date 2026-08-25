@@ -220,7 +220,7 @@ misbehaving first and a test second:
 - No read group may hold a single key.
 - The inverter's AC total is not published as the battery's AC port.
 - Every form schema survives the serialisation the frontend needs (§13.9).
-- A discharge is released, not repeated, while the strings are lit but idle.
+- Nothing is commanded at all while the strings carry voltage.
 - Shutdown clears the registers over the path the commands took.
 - An unpopulated pack slot produces no entities at all.
 - A battery device belonging to a different inverter is refused.
@@ -397,27 +397,37 @@ padding, so the pack 1 firmware string decodes to nothing, and the battery
 flapped in and out of the pool every three seconds all day. Groups are now one
 per cadence rather than one per block.
 
-### 13.8 A held discharge keeps the strings dark
+### 13.8 A forcible command caps the inverter's own production
 
 The worst fault this driver has caused, and the one most specific to a hybrid.
 
-A forcible discharge serves the house from the battery, and the inverter then
-has no use for its strings: the MPPT tracker stays down. The panels sit at
-open-circuit voltage drawing nothing — 374 V at 0.00 A through a cloudless
-sunrise, against 375 V at 11.4 A twelve seconds after the registers were
-cleared.
+**A forcible command is not a request but a ceiling.** The inverter produces
+exactly what it was told and curtails the rest of the roof. Caught in the act
+with a 315 W charge standing: 288 W harvested from an array that made 5054 W six
+seconds after the command ended, while a separate balcony array on the same roof
+held steady throughout — so not weather.
 
-What makes it a trap rather than a nuisance is the feedback. With the roof
-producing nothing, the meter shows a real deficit, and a deficit is what asks
-for discharge. The command goes on justifying itself, and it survives sunrise:
-commanded at 04:32 against a genuinely dark sky, still standing at 09:22.
+A discharge is worse still. It serves the house from the battery and leaves the
+MPPT tracker down entirely, so the panels sit at open-circuit voltage drawing
+nothing: 374 V at 0.00 A. And with the roof producing nothing, the meter shows a
+real deficit — which is what asks for discharge. The command goes on justifying
+itself and survives sunrise: commanded at 04:32 against a genuinely dark sky,
+still standing at 09:22.
 
-The signal to act on comes from the strings themselves. Lit but unharvested is a
-state the inverter reports plainly and unambiguously — at night the voltage
-collapses too, and while the tracker runs there is current — so no forecast,
-sun elevation or clock is needed. A discharge asked for in that state is
-released instead of repeated, which lights the strings, which makes the next
-cycle decide on the truth.
+**So while there is light on the panels, this driver commands nothing.** It
+releases instead and leaves the inverter to its own regulation, which harvests
+everything and runs the battery from it. That is not a workaround: on a
+DC-coupled hybrid the inverter is the better controller during daylight, because
+it is the only party that knows what the array could be making.
+
+The daylight test comes from the strings themselves — a string carries voltage
+when there is light on it and collapses in the dark — so no forecast, sun
+elevation or clock is involved.
+
+What this costs is real and belongs in the decision: **a Huawei battery is only
+under Omnibattery's control after dark.** During the day it follows its own
+energy manager. An installation whose second battery is AC-coupled still gets
+full control of that one, which is where the surplus can be steered.
 
 ### 13.9 A form schema must survive serialisation
 
@@ -440,6 +450,7 @@ Firmware tested:    inverter V200R024C00SPC110, storage V200R025C00SPC103
 Documentation:      Solar Inverter Modbus Interface Definitions v05
 
 Verdict: SUITABLE WITH LIMITATIONS
+         Control is available after dark only (§13.8)
 
 Blocking items:
 - Real SOC:        N — register 37004, verified

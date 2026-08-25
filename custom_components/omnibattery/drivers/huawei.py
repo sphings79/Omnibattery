@@ -81,12 +81,10 @@ _REG_CHARGE_CUTOFF = 47081             # u16, tenths of a percent
 _REG_DISCHARGE_CUTOFF = 47082          # u16, tenths of a percent
 _TARGET_MODE_TIME = 0
 
-# A string sitting at open-circuit voltage while drawing no current is lit but
-# unharvested: at night the voltage collapses too, and while the tracker runs
-# there is current. Measured on the reference installation during the fault:
-# 374 V at 0.00 A, against 375 V at 11.4 A one minute after the release.
+# A string carries voltage when there is light on it and collapses in the dark,
+# which makes it a reliable daylight signal needing no forecast, sun elevation or
+# clock. Measured on the reference installation: 374 V under sun, 0 V at night.
 _PV_LIT_VOLTAGE_V = 100.0
-_PV_IDLE_CURRENT_A = 0.15
 
 # Slave ids worth trying when scanning. 1 is the factory default for a direct
 # connection; the rest are what dongles and energy managers hand out. Kept short
@@ -411,7 +409,7 @@ class HuaweiSolarDriver(BatteryDriver):
         # Empty until one has, so a failed read never hides a pack that exists.
         self._packs: set[int] = set()
         # Strings lit but not harvested — see read_telemetry.
-        self._pv_suppressed = False
+        self._pv_lit = False
         self._serial: Optional[str] = None
         # Last command actually written, so the deadband can compare against what
         # the hardware was told rather than against what it currently delivers.
@@ -652,25 +650,16 @@ class HuaweiSolarDriver(BatteryDriver):
         if storage is not None:
             self._storage_model = _STORAGE_MODELS.get(int(storage)) or self._storage_model
 
-        # Lit strings the inverter is not harvesting. On this hybrid a latched
-        # forcible discharge does exactly that: it serves the house from the
-        # battery and leaves the tracker down, so the roof produces nothing and
-        # the missing production then reads as a genuine deficit — the command
-        # goes on justifying itself. Observed from 04:32 until 09:22, through a
-        # cloudless sunrise, until the registers were cleared by hand.
-        lit_but_idle = False
-        for index in range(1, self._pv_strings + 1):
-            volts = snapshot.get(f"pv{index}_voltage")
-            amps = snapshot.get(f"pv{index}_current")
-            if volts is None or amps is None:
-                continue
-            if volts > _PV_LIT_VOLTAGE_V and abs(amps) < _PV_IDLE_CURRENT_A:
-                lit_but_idle = True
-        if any(
-            snapshot.get(f"pv{index}_voltage") is not None
+        # Is there light on the panels? See _pv_lit for why that decides whether
+        # this driver may command anything at all.
+        voltages = [
+            snapshot.get(f"pv{index}_voltage")
             for index in range(1, self._pv_strings + 1)
-        ):
-            self._pv_suppressed = lit_but_idle
+        ]
+        if any(volts is not None for volts in voltages):
+            self._pv_lit = any(
+                volts is not None and volts > _PV_LIT_VOLTAGE_V for volts in voltages
+            )
 
         for index in (1, 2, 3):
             if snapshot.get(f"pack{index}_serial_number") or snapshot.get(
@@ -765,14 +754,21 @@ class HuaweiSolarDriver(BatteryDriver):
             min(self._ceiling("charge"), int(net_power_w)),
         )
 
-        if applied < 0 and self._pv_suppressed:
-            # Discharging is what put the tracker down; asking again would keep
-            # it there. Release instead and let the inverter light the strings —
-            # the next cycle sees real production and can decide on the truth.
+        if applied != 0 and self._pv_lit:
+            # A forcible command on this hybrid is not a request but a ceiling:
+            # the inverter produces exactly what the command asks for and
+            # curtails the rest of the roof. Measured with a 315 W charge
+            # standing: 288 W harvested, and 5054 W six seconds after it ended.
+            # A discharge does the same, holding the tracker down entirely.
+            #
+            # So while there is light on the panels this driver commands
+            # nothing. The inverter's own regulation harvests everything and
+            # runs the battery from it, which is what the release hands back to.
             _LOGGER.info(
-                "Huawei driver: releasing instead of discharging %dW — the "
-                "strings are lit but idle, which a held discharge causes",
-                abs(applied),
+                "Huawei driver: releasing instead of commanding %dW — a forcible "
+                "command caps this inverter's own production while the sun is on "
+                "the panels",
+                applied,
             )
             applied = 0
 
