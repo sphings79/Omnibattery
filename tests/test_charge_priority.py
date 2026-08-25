@@ -260,3 +260,20 @@ def test_the_panel_explains_the_new_control_in_every_language():
     assert '{ key: "charge_priority", domain: "select"' in panel
     assert len(re.findall(r"\bitemChargePriority:", panel)) == 6
     assert len(re.findall(r'^    charge_priority: "', panel, re.M)) == 6
+
+
+def test_the_head_battery_reaches_its_own_rating():
+    """What the surplus feedforward is for: the slow battery at full power.
+
+    The reference case, mid-morning: the hybrid at 97 % with almost no room
+    left, the AC battery at 21 % with 12 kWh of it. A system figure capped at
+    2500 W left the AC battery on 2418 — its share of its own rating — while
+    6.8 kW of surplus went past. Offering the fleet's whole capacity lets the
+    distribution cap it at 2500 where it belongs.
+    """
+    batteries = [
+        _battery("Marstek", capacity=15.36, soc=21, limit_w=2500),
+        _battery("Huawei", capacity=13.8, soc=97, limit_w=7000, dc_coupled=True),
+    ]
+    assert _split(batteries, 2500)["Marstek"] == 2420    # the old, capped figure
+    assert _split(batteries, 6828)["Marstek"] == 2500    # the whole surplus

@@ -703,20 +703,25 @@ def _charge_feedforward_candidate_w(controller, grid_w) -> float:
     while the other fills: observed at 5834 W of sun with the hybrid at 83 % and
     the battery meant to go first sitting at 17 %, untouched.
 
-    Positive watts in the charge direction; 0 when there is no surplus or the
-    battery at the head of the order cannot take it.
+    Positive watts in the charge direction; 0 when there is no surplus or no
+    battery can take it.
+
+    Capped at what the fleet can absorb between them, not at what the first
+    battery can: this is a figure for the whole system, and the distribution
+    shares it out afterwards. Capping it at one battery's rating means that
+    battery receives only its share of its own limit — 2418 W of a 2500 W
+    rating on the reference installation, with 6.8 kW of surplus going past it.
     """
     demand = _uncovered_load_w(controller, grid_w)
     if demand is None or demand >= 0:
         return 0.0
-    batteries = [
-        coordinator for coordinator in getattr(controller, "coordinators", [])
-        if controller._battery_power_limit(coordinator, True) > 0
-    ]
-    if not batteries:
+    room = sum(
+        controller._battery_power_limit(coordinator, True)
+        for coordinator in getattr(controller, "coordinators", [])
+    )
+    if room <= 0:
         return 0.0
-    first = _charge_order(controller, batteries)[0]
-    return float(min(-demand, controller._battery_power_limit(first, True)))
+    return float(min(-demand, room))
 
 
 def _charge_feedforward_w(controller, grid_w) -> float:

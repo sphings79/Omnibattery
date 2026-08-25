@@ -525,10 +525,23 @@ def _surplus_taken_by_the_other():
     return controller, _charge_feedforward_w
 
 
-def test_the_surplus_is_offered_to_the_battery_that_should_go_first():
+def test_the_whole_surplus_is_offered_not_one_batterys_worth():
+    """The floor is a system figure; the distribution shares it out after.
+
+    Capped at the head battery's own rating, that battery ends up with only its
+    share of its own limit — 2418 W of 2500 on the reference installation, while
+    6.8 kW of surplus went past it.
+    """
     controller, feedforward = _surplus_taken_by_the_other()
     assert _uncovered_load_w(controller, 67.0) < 0
-    # Its own charge limit, not the whole surplus.
+    assert feedforward(controller, 67.0) == 5107.0
+
+
+def test_the_offer_never_exceeds_what_the_fleet_can_take():
+    controller, feedforward = _surplus_taken_by_the_other()
+    controller._battery_power_limit = lambda coordinator, is_charging: (
+        2500 if coordinator.name == "Marstek" else 0
+    )
     assert feedforward(controller, 67.0) == 2500.0
 
 
@@ -549,9 +562,9 @@ def test_a_deficit_offers_nothing_to_absorb():
 
 def test_the_command_is_floored_at_the_surplus():
     controller, _ = _surplus_taken_by_the_other()
-    assert _apply_primary_feedforward(controller, 0, 67.0) == 2500.0
+    assert _apply_primary_feedforward(controller, 0, 67.0) == 5107.0
     # A larger charge request is left alone; it is a floor, not a target.
-    assert _apply_primary_feedforward(controller, 4000, 67.0) == 4000
+    assert _apply_primary_feedforward(controller, 6000, 67.0) == 6000
 
 
 def test_the_quiet_meter_does_not_hide_an_unclaimed_surplus():
@@ -559,7 +572,7 @@ def test_the_quiet_meter_does_not_hide_an_unclaimed_surplus():
     controller.previous_power = 0.0
     assert _primary_feedforward_pending(controller, 67.0) is True
 
-    controller.previous_power = 2500.0
+    controller.previous_power = 5107.0
     assert _primary_feedforward_pending(controller, 67.0) is False
 
 
@@ -570,10 +583,9 @@ def test_the_switch_gates_the_surplus_side_too():
     assert _primary_feedforward_pending(controller, 67.0) is False
 
 
-def test_a_battery_that_cannot_charge_is_passed_over():
+def test_a_battery_that_cannot_charge_adds_no_room():
     controller, feedforward = _surplus_taken_by_the_other()
     controller._battery_power_limit = lambda coordinator, is_charging: (
-        0 if coordinator.name == "Marstek" else 7000
+        0 if coordinator.name == "Marstek" else 3000
     )
-    # The full one at the head of the order steps aside for the other.
-    assert feedforward(controller, 67.0) == 5107.0
+    assert feedforward(controller, 67.0) == 3000.0
