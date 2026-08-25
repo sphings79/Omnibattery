@@ -693,6 +693,39 @@ def _primary_feedforward_candidate_w(controller, grid_w) -> float:
         return 0.0
     return float(min(demand, limit))
 
+def _charge_feedforward_candidate_w(controller, grid_w) -> float:
+    """Surplus the first battery in the charge order should be absorbing.
+
+    The mirror of the load side, and needed for the same reason. A second
+    regulator on the meter takes the surplus into its own battery, the grid
+    reads zero, and this controller — correctly, on what it can see — commands
+    nothing. The battery that was supposed to be filled first then stays empty
+    while the other fills: observed at 5834 W of sun with the hybrid at 83 % and
+    the battery meant to go first sitting at 17 %, untouched.
+
+    Positive watts in the charge direction; 0 when there is no surplus or the
+    battery at the head of the order cannot take it.
+    """
+    demand = _uncovered_load_w(controller, grid_w)
+    if demand is None or demand >= 0:
+        return 0.0
+    batteries = [
+        coordinator for coordinator in getattr(controller, "coordinators", [])
+        if controller._battery_power_limit(coordinator, True) > 0
+    ]
+    if not batteries:
+        return 0.0
+    first = _charge_order(controller, batteries)[0]
+    return float(min(-demand, controller._battery_power_limit(first, True)))
+
+
+def _charge_feedforward_w(controller, grid_w) -> float:
+    """The charge feedforward the control cycle acts on."""
+    if not getattr(controller, "primary_feedforward_enabled", False):
+        return 0.0
+    return _charge_feedforward_candidate_w(controller, grid_w)
+
+
 def _primary_feedforward_w(controller, grid_w) -> float:
     """The feedforward the control cycle acts on: zero while the switch is off."""
     if not getattr(controller, "primary_feedforward_enabled", False):
@@ -771,21 +804,32 @@ def _primary_feedforward_pending(controller, grid_w) -> bool:
     the situation this feature exists to change.
     """
     feedforward = _primary_feedforward_w(controller, grid_w)
-    if feedforward <= 0:
-        return False
-    return controller.previous_power > -(feedforward - PRIMARY_FEEDFORWARD_TOLERANCE_W)
+    if feedforward > 0:
+        return controller.previous_power > -(feedforward - PRIMARY_FEEDFORWARD_TOLERANCE_W)
+    absorbing = _charge_feedforward_w(controller, grid_w)
+    if absorbing > 0:
+        return controller.previous_power < absorbing - PRIMARY_FEEDFORWARD_TOLERANCE_W
+    return False
 
 def _apply_primary_feedforward(controller, new_power, grid_w):
-    """Floor the command at the house load, in the discharge direction."""
+    """Floor the command at the real demand, whichever way it points."""
     feedforward = _primary_feedforward_w(controller, grid_w)
-    if feedforward <= 0:
+    if feedforward > 0:
+        if new_power > -feedforward:
+            _LOGGER.debug(
+                "Primary feedforward: raising %.1fW to %.1fW to cover the house load",
+                new_power, -feedforward,
+            )
+            return -feedforward
         return new_power
-    if new_power > -feedforward:
+
+    absorbing = _charge_feedforward_w(controller, grid_w)
+    if absorbing > 0 and new_power < absorbing:
         _LOGGER.debug(
-            "Primary feedforward: raising %.1fW to %.1fW to cover the house load",
-            new_power, -feedforward,
+            "Primary feedforward: raising %.1fW to %.1fW to take the surplus",
+            new_power, absorbing,
         )
-        return -feedforward
+        return absorbing
     return new_power
 
 

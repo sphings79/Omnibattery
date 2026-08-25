@@ -497,3 +497,83 @@ def test_an_unavailable_meter_reports_nothing_rather_than_zero():
         states=SimpleNamespace(get=lambda _eid: SimpleNamespace(state="unavailable"))
     )
     assert _grid_reading_w(controller) is None
+
+
+# ----------------------------------------------------------------------
+# the surplus side
+#
+# The mirror of the load side, needed for the same reason. A second regulator on
+# the meter takes the surplus into its own battery, the grid reads zero, and
+# this controller correctly commands nothing on what it can see. The battery
+# meant to be filled first then stays empty: observed at 5834 W of sun with the
+# hybrid at 83 % and the other at 17 %, untouched, order and switch both right.
+# ----------------------------------------------------------------------
+def _surplus_taken_by_the_other():
+    """Sun to spare, and the hybrid quietly absorbing all of it."""
+    from custom_components.omnibattery import _charge_feedforward_w
+
+    controller = _solar_controller(5834, [
+        _battery("Marstek", ac_power=13),      # idle
+        _battery("Huawei", ac_power=-5187),    # charging, commanded by nobody
+    ])
+    controller.charge_priority = "Marstek"
+    controller._scarce_solar_latched = False
+    controller._active_charge_batteries = []
+    controller._battery_power_limit = lambda coordinator, is_charging: (
+        2500 if coordinator.name == "Marstek" else 7000
+    )
+    return controller, _charge_feedforward_w
+
+
+def test_the_surplus_is_offered_to_the_battery_that_should_go_first():
+    controller, feedforward = _surplus_taken_by_the_other()
+    assert _uncovered_load_w(controller, 67.0) < 0
+    # Its own charge limit, not the whole surplus.
+    assert feedforward(controller, 67.0) == 2500.0
+
+
+def test_a_small_surplus_is_not_rounded_up_to_the_limit():
+    controller, feedforward = _surplus_taken_by_the_other()
+    controller.coordinators = [
+        _battery("Marstek", ac_power=0),
+        _battery("Huawei", ac_power=-800),
+    ]
+    assert feedforward(controller, 0.0) == 800.0
+
+
+def test_a_deficit_offers_nothing_to_absorb():
+    controller, feedforward = _surplus_taken_by_the_other()
+    controller.coordinators = [_battery("Marstek", ac_power=665)]
+    assert feedforward(controller, -40.0) == 0.0
+
+
+def test_the_command_is_floored_at_the_surplus():
+    controller, _ = _surplus_taken_by_the_other()
+    assert _apply_primary_feedforward(controller, 0, 67.0) == 2500.0
+    # A larger charge request is left alone; it is a floor, not a target.
+    assert _apply_primary_feedforward(controller, 4000, 67.0) == 4000
+
+
+def test_the_quiet_meter_does_not_hide_an_unclaimed_surplus():
+    controller, _ = _surplus_taken_by_the_other()
+    controller.previous_power = 0.0
+    assert _primary_feedforward_pending(controller, 67.0) is True
+
+    controller.previous_power = 2500.0
+    assert _primary_feedforward_pending(controller, 67.0) is False
+
+
+def test_the_switch_gates_the_surplus_side_too():
+    controller, feedforward = _surplus_taken_by_the_other()
+    controller.primary_feedforward_enabled = False
+    assert feedforward(controller, 67.0) == 0.0
+    assert _primary_feedforward_pending(controller, 67.0) is False
+
+
+def test_a_battery_that_cannot_charge_is_passed_over():
+    controller, feedforward = _surplus_taken_by_the_other()
+    controller._battery_power_limit = lambda coordinator, is_charging: (
+        0 if coordinator.name == "Marstek" else 7000
+    )
+    # The full one at the head of the order steps aside for the other.
+    assert feedforward(controller, 67.0) == 5107.0

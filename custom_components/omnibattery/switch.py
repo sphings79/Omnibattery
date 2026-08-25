@@ -1572,6 +1572,7 @@ class PrimaryFeedforwardSwitch(SwitchEntity):
             _grid_reading_w,
             _measured_house_load_w,
             _primary_coordinator,
+            _charge_feedforward_candidate_w,
             _primary_feedforward_candidate_w,
             _uncovered_load_w,
         )
@@ -1587,6 +1588,7 @@ class PrimaryFeedforwardSwitch(SwitchEntity):
             "house_load_w": round(house) if house is not None else None,
             "uncovered_load_w": round(uncovered) if uncovered is not None else None,
             "feedforward_w": round(_primary_feedforward_candidate_w(self.controller, grid_w)),
+            "absorb_w": round(_charge_feedforward_candidate_w(self.controller, grid_w)),
         }
 
     async def _set_enabled(self, enabled: bool) -> None:
