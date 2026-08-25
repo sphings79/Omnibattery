@@ -15,6 +15,10 @@
     "solar_forecast_unusable": {
       "title": "Previsión solar inutilizable",
       "description": "El sensor de previsión solar configurado {sensor} lleva más de {minutes} minutos no disponible o ilegible. Omnibattery sigue funcionando, pero todo lo que depende de la previsión está a ciegas: el retardo de carga se libera durante el resto del día, las decisiones de carga desde red asumen que no habrá sol y pueden reservar franjas innecesarias, y la estimación de sol restante marca 0 kWh. Revise el sensor o la integración que lo proporciona."
+    },
+    "solar_forecast_remaining_recommended": {
+      "title": "Usa una previsión solar restante",
+      "description": "{sensor} es una previsión solar heredada para todo el día. Omnibattery la sigue admitiendo, pero los errores de previsión ya ocurridos pueden hacer imprecisas las decisiones intradía. Configura en las opciones de Omnibattery el sensor de previsión del proveedor para \"restante hoy\" para calcular con más precisión el sol restante."
     }
   },
   "config": {
@@ -28,7 +32,8 @@
         "description": "Selecciona el sensor que mide la importación/exportación de la red eléctrica. Opcionalmente, configura el sensor de predicción solar para funciones avanzadas.",
         "data": {
           "consumption_sensor": "Sensor de consumo de la red",
-          "solar_forecast_sensor": "Sensor de predicción solar (opcional)",
+          "solar_forecast_sensor": "Sensor de previsión solar del día completo (legado)",
+          "solar_forecast_remaining_sensor": "Sensor de previsión solar restante de hoy (recomendado)",
           "solar_production_sensor": "Sensor de producción solar (opcional)",
           "meter_inverted": "Signo del medidor invertido",
           "max_contracted_power": "Potencia máxima contratada (W)",
@@ -36,7 +41,8 @@
         },
         "data_description": {
           "consumption_sensor": "Sensor en tiempo real de potencia importada (+) o exportada (-) a la red. Se recomiendan actualizaciones cada 1-2 segundos. Se aceptan sensores más lentos, pero las lecturas retrasadas reducen la calidad de la regulación; la última lectura se sigue durante un máximo de 65 segundos.",
-          "solar_forecast_sensor": "Sensor que proporciona la predicción de producción solar en kWh (ej: Solcast). Si se configura aquí, se usará automáticamente en carga predictiva y retraso de carga solar.",
+          "solar_forecast_sensor": "Sensor legado con la previsión solar del día completo. Las instalaciones existentes pueden mantenerlo durante la transición; para configuraciones nuevas se recomienda Restante de hoy.",
+          "solar_forecast_remaining_sensor": "Sensor con la producción solar que todavía se espera hoy en kWh. Al guardarlo sustituye el forecast legado y nunca se reduce con la producción ya medida.",
           "solar_production_sensor": "Sensor de potencia de producción fotovoltaica en tiempo real (W/kW) de un inversor externo que no pasa por las entradas MPPT de la batería. Se usa para mostrar el nodo Solar en el diagrama de flujo del panel. Déjalo vacío si tus paneles alimentan directamente el MPPT de la batería.",
           "meter_inverted": "Activa esta opción si tu medidor usa el convenio opuesto: positivo = exportación, negativo = importación. La unidad (W/kW) se detecta automáticamente.",
           "max_contracted_power": "Potencia total contratada en vatios. El sistema no superará este límite al cargar para evitar que salte el diferencial",
@@ -223,7 +229,23 @@
           "battery_6__soc_min": "Batería 6 — SOC mínimo (%)",
           "battery_6__soc_max": "Batería 6 — SOC máximo (%)",
           "battery_6__max_charge_power_w": "Batería 6 — Potencia máx. carga (W)",
-          "battery_6__max_discharge_power_w": "Batería 6 — Potencia máx. descarga (W)"
+          "battery_6__max_discharge_power_w": "Batería 6 — Potencia máx. descarga (W)",
+          "battery_7__soc_min": "Batería 7 — SOC mínimo (%)",
+          "battery_7__soc_max": "Batería 7 — SOC máximo (%)",
+          "battery_7__max_charge_power_w": "Batería 7 — Potencia máx. carga (W)",
+          "battery_7__max_discharge_power_w": "Batería 7 — Potencia máx. descarga (W)",
+          "battery_8__soc_min": "Batería 8 — SOC mínimo (%)",
+          "battery_8__soc_max": "Batería 8 — SOC máximo (%)",
+          "battery_8__max_charge_power_w": "Batería 8 — Potencia máx. carga (W)",
+          "battery_8__max_discharge_power_w": "Batería 8 — Potencia máx. descarga (W)",
+          "battery_9__soc_min": "Batería 9 — SOC mínimo (%)",
+          "battery_9__soc_max": "Batería 9 — SOC máximo (%)",
+          "battery_9__max_charge_power_w": "Batería 9 — Potencia máx. carga (W)",
+          "battery_9__max_discharge_power_w": "Batería 9 — Potencia máx. descarga (W)",
+          "battery_10__soc_min": "Batería 10 — SOC mínimo (%)",
+          "battery_10__soc_max": "Batería 10 — SOC máximo (%)",
+          "battery_10__max_charge_power_w": "Batería 10 — Potencia máx. carga (W)",
+          "battery_10__max_discharge_power_w": "Batería 10 — Potencia máx. descarga (W)"
         },
         "data_description": {
           "soc_min": "La batería no descargará por debajo de este SOC durante la franja (mínimo 12%).",
@@ -582,6 +604,13 @@
           "slave_id": "Modbus slave/unit id (default 1)"
         }
       },
+          "reconfigure_battery_huawei_slave": {
+            "title": "Reconfigurar batería {battery_num} — ¿Qué inversor?",
+            "description": "{count} inversores con batería respondieron en este bus. Elige aquel al que pertenece esta batería.",
+            "data": {
+              "slave_id": "Inverter"
+            }
+          },
         "reconfigure_battery_huawei": {
           "title": "Reconfigurar batería {battery_num} — Conexión (Huawei)",
           "description": "Actualiza el acceso Modbus y el dispositivo de batería de Huawei Solar para la batería {battery_num}. El resto de ajustes se conservan.",
@@ -635,7 +664,7 @@
       },
       "battery_connection_huawei": {
         "title": "Configure battery {battery_num} — Connection (Huawei)",
-        "description": "Omnibattery reads this battery over Modbus and sends its set-points through the Huawei Solar integration, so it needs both: a Modbus endpoint and the battery device. Point the Modbus address at a Modbus proxy rather than straight at the inverter — the Huawei Solar integration already holds a connection to it.\n\nA Huawei inverter accepts only ONE Modbus connection at a time. If anything else talks to it besides Omnibattery — the Huawei Solar integration, evcc, another system — you need a Modbus proxy in front that fans the connection out to several clients, for example https://github.com/Akulatraxas/ha-modbusproxy. Enter the proxy's address and port instead of the inverter's. The slave id is searched for automatically when the one entered does not answer.",
+        "description": "Omnibattery reads this battery over Modbus and sends its set-points through the Huawei Solar integration, so it needs both: a Modbus endpoint and the battery device. Point the Modbus address at a Modbus proxy rather than straight at the inverter — the Huawei Solar integration already holds a connection to it.\n\nA Huawei inverter accepts only ONE Modbus connection at a time. If anything else talks to it besides Omnibattery — the Huawei Solar integration, evcc, another system — you need a Modbus proxy in front that fans the connection out to several clients, for example {proxy_url}. Enter the proxy's address and port instead of the inverter's. The slave id is searched for automatically when the one entered does not answer.",
         "data": {"name": "Name", "host": "IP Address", "port": "Modbus Port", "slave_id": "Modbus slave id (leave empty to search)", "huawei_battery_device": "Huawei Solar battery device", "huawei_direct_write": "Direct Modbus writes"},
         "data_description": {"name": "Descriptive name to identify this battery", "host": "Address of the Modbus proxy or inverter Omnibattery reads from", "port": "Modbus TCP port (default 502)", "slave_id": "Unit id of the inverter — not of the energy manager or a charger. Leave it empty and setup goes looking: it tries the usual ids, identifies each inverter by its model register and takes the one with a battery attached. If several answer — Huawei inverters can be cascaded — a selection step follows. The search takes about 15 seconds.", "huawei_battery_device": "Only needed when direct Modbus writes are off, in which case set-points go through the Huawei Solar integration's services. With direct writes, leave it empty.", "huawei_direct_write": "Write set-points as Modbus registers instead of calling the Huawei Solar integration's services. Same register sequence, but without the detour through the service layer or the wait on that integration's communication lock. Off by default — enable it once the proven path is working."}
       },
@@ -748,7 +777,8 @@
         "description": "Configura los sensores utilizados por la integración.",
         "data": {
           "consumption_sensor": "Sensor de consumo de la red",
-          "solar_forecast_sensor": "Sensor de predicción solar (opcional)",
+          "solar_forecast_sensor": "Sensor de previsión solar del día completo (legado)",
+          "solar_forecast_remaining_sensor": "Sensor de previsión solar restante de hoy (recomendado)",
           "solar_production_sensor": "Sensor de producción solar (opcional)",
           "meter_inverted": "Signo del medidor invertido",
           "max_contracted_power": "Potencia máxima contratada (W)",
@@ -756,7 +786,8 @@
         },
         "data_description": {
           "consumption_sensor": "Sensor en tiempo real de potencia importada (+) o exportada (-) a la red. Se recomiendan actualizaciones cada 1-2 segundos. Se aceptan sensores más lentos, pero las lecturas retrasadas reducen la calidad de la regulación; la última lectura se sigue durante un máximo de 65 segundos.",
-          "solar_forecast_sensor": "Sensor que proporciona la predicción de producción solar en kWh (ej: Solcast). Si se configura aquí, se usará automáticamente en carga predictiva y retraso de carga solar.",
+          "solar_forecast_sensor": "Sensor legado con la previsión solar del día completo. Las instalaciones existentes pueden mantenerlo durante la transición; para configuraciones nuevas se recomienda Restante de hoy.",
+          "solar_forecast_remaining_sensor": "Sensor con la producción solar que todavía se espera hoy en kWh. Al guardarlo sustituye el forecast legado y nunca se reduce con la producción ya medida.",
           "solar_production_sensor": "Sensor de potencia de producción fotovoltaica en tiempo real (W/kW) de un inversor externo que no pasa por las entradas MPPT de la batería. Se usa para mostrar el nodo Solar en el diagrama de flujo del panel. Déjalo vacío si tus paneles alimentan directamente el MPPT de la batería.",
           "meter_inverted": "Activa esta opción si tu medidor usa el convenio opuesto: positivo = exportación, negativo = importación. La unidad (W/kW) se detecta automáticamente.",
           "max_contracted_power": "Potencia total contratada en vatios. El sistema no superará este límite al cargar para evitar que salte el diferencial",
@@ -912,7 +943,23 @@
           "battery_6__soc_min": "Batería 6 — SOC mínimo (%)",
           "battery_6__soc_max": "Batería 6 — SOC máximo (%)",
           "battery_6__max_charge_power_w": "Batería 6 — Potencia máx. carga (W)",
-          "battery_6__max_discharge_power_w": "Batería 6 — Potencia máx. descarga (W)"
+          "battery_6__max_discharge_power_w": "Batería 6 — Potencia máx. descarga (W)",
+          "battery_7__soc_min": "Batería 7 — SOC mínimo (%)",
+          "battery_7__soc_max": "Batería 7 — SOC máximo (%)",
+          "battery_7__max_charge_power_w": "Batería 7 — Potencia máx. carga (W)",
+          "battery_7__max_discharge_power_w": "Batería 7 — Potencia máx. descarga (W)",
+          "battery_8__soc_min": "Batería 8 — SOC mínimo (%)",
+          "battery_8__soc_max": "Batería 8 — SOC máximo (%)",
+          "battery_8__max_charge_power_w": "Batería 8 — Potencia máx. carga (W)",
+          "battery_8__max_discharge_power_w": "Batería 8 — Potencia máx. descarga (W)",
+          "battery_9__soc_min": "Batería 9 — SOC mínimo (%)",
+          "battery_9__soc_max": "Batería 9 — SOC máximo (%)",
+          "battery_9__max_charge_power_w": "Batería 9 — Potencia máx. carga (W)",
+          "battery_9__max_discharge_power_w": "Batería 9 — Potencia máx. descarga (W)",
+          "battery_10__soc_min": "Batería 10 — SOC mínimo (%)",
+          "battery_10__soc_max": "Batería 10 — SOC máximo (%)",
+          "battery_10__max_charge_power_w": "Batería 10 — Potencia máx. carga (W)",
+          "battery_10__max_discharge_power_w": "Batería 10 — Potencia máx. descarga (W)"
         },
         "data_description": {
           "soc_min": "La batería no descargará por debajo de este SOC durante la franja (mínimo 12%).",
@@ -1223,7 +1270,7 @@
       },
       "battery_connection_huawei": {
         "title": "Configure battery {battery_num} — Connection (Huawei)",
-        "description": "Modify the Modbus endpoint and the Huawei Solar battery device used for battery {battery_num}.\n\nA Huawei inverter accepts only ONE Modbus connection at a time. If anything else talks to it besides Omnibattery — the Huawei Solar integration, evcc, another system — you need a Modbus proxy in front that fans the connection out to several clients, for example https://github.com/Akulatraxas/ha-modbusproxy. Enter the proxy's address and port instead of the inverter's. The slave id is searched for automatically when the one entered does not answer.",
+        "description": "Modify the Modbus endpoint and the Huawei Solar battery device used for battery {battery_num}.\n\nA Huawei inverter accepts only ONE Modbus connection at a time. If anything else talks to it besides Omnibattery — the Huawei Solar integration, evcc, another system — you need a Modbus proxy in front that fans the connection out to several clients, for example {proxy_url}. Enter the proxy's address and port instead of the inverter's. The slave id is searched for automatically when the one entered does not answer.",
         "data": {"name": "Name", "host": "IP Address", "port": "Modbus Port", "slave_id": "Modbus slave id (leave empty to search)", "huawei_battery_device": "Huawei Solar battery device", "huawei_direct_write": "Direct Modbus writes"},
         "data_description": {"name": "Descriptive name to identify this battery", "host": "Address of the Modbus proxy or inverter Omnibattery reads from", "port": "Modbus TCP port (default 502)", "slave_id": "Unit id of the inverter — not of the energy manager or a charger. Leave it empty and setup goes looking: it tries the usual ids, identifies each inverter by its model register and takes the one with a battery attached. If several answer — Huawei inverters can be cascaded — a selection step follows. The search takes about 15 seconds.", "huawei_battery_device": "Only needed when direct Modbus writes are off, in which case set-points go through the Huawei Solar integration's services. With direct writes, leave it empty.", "huawei_direct_write": "Write set-points as Modbus registers instead of calling the Huawei Solar integration's services. Same register sequence, but without the detour through the service layer or the wait on that integration's communication lock. Off by default — enable it once the proven path is working."}
       },
@@ -1381,6 +1428,9 @@
       "predictive_charging": {
         "name": "Carga Predictiva"
       },
+      "vacation_mode": {
+        "name": "Modo vacaciones"
+      },
       "charge_delay": {
         "name": "Retraso de Carga"
       },
@@ -1480,6 +1530,15 @@
       "system_daily_home_energy": {
         "name": "Consumo Diario de la Casa"
       },
+      "expected_home_consumption_profile": {
+        "name": "Perfil de consumo doméstico esperado"
+      },
+      "consumption_profile_capture": {
+        "name": "Captura del perfil de consumo actual"
+      },
+      "daily_operation_timeline": {
+        "name": "Línea temporal de operación diaria"
+      },
       "home_consumption": {
         "name": "Consumo de la Casa"
       },
@@ -1491,6 +1550,7 @@
           "oscillating": "Oscilando",
           "sluggish": "Lento",
           "battery_limited": "Limitado por batería",
+          "blocked": "Bloqueado",
           "collecting_data": "Recopilando datos"
         }
       },
@@ -1593,6 +1653,9 @@
       },
       "total_discharging_energy": {
         "name": "Energía Total de Descarga"
+      },
+      "pv_total_generation": {
+        "name": "Generación FV Total"
       },
       "total_daily_charging_energy": {
         "name": "Energía de Carga Diaria"

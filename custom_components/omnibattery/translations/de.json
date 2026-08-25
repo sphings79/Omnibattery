@@ -15,6 +15,10 @@
     "solar_forecast_unusable": {
       "title": "Solarprognose unbrauchbar",
       "description": "Der konfigurierte Solarprognose-Sensor {sensor} ist seit über {minutes} Minuten nicht verfügbar oder nicht lesbar. Omnibattery läuft weiter, aber alles, was auf der Prognose beruht, arbeitet blind: die Ladeverzögerung gibt für den Rest des Tages frei, Entscheidungen zum Netzladen gehen von gar keiner Sonne aus und buchen womöglich unnötige Netzslots, und die Restsonnen-Schätzung liest 0 kWh. Prüfen Sie den Sensor oder die Integration, die ihn liefert."
+    },
+    "solar_forecast_remaining_recommended": {
+      "title": "Verbleibende Solarprognose verwenden",
+      "description": "{sensor} ist eine ältere Solarprognose für den ganzen Tag. Omnibattery unterstützt sie weiterhin, aber bereits eingetretene Prognosefehler können Entscheidungen innerhalb des Tages ungenau machen. Konfigurieren Sie in den Omnibattery-Optionen den Sensor des Anbieters für die Prognose \"heute verbleibend\", um die verbleibende Solarenergie genauer zu berechnen."
     }
   },
   "config": {
@@ -28,7 +32,8 @@
         "description": "Wählen Sie den Sensor aus, der die Netzimport-/Exportleistung misst. Optional können Sie den Solarprognose-Sensor für erweiterte Funktionen konfigurieren.",
         "data": {
           "consumption_sensor": "Netzverbrauchssensor",
-          "solar_forecast_sensor": "Solarprognose-Sensor (optional)",
+          "solar_forecast_sensor": "Solarprognose-Sensor für den gesamten Tag (veraltet)",
+          "solar_forecast_remaining_sensor": "Sensor für die heute verbleibende Solarprognose (empfohlen)",
           "solar_production_sensor": "Solarproduktionssensor (optional)",
           "meter_inverted": "Zählervorzeichen invertiert",
           "max_contracted_power": "Maximale Vertragsleistung (W)",
@@ -36,7 +41,8 @@
         },
         "data_description": {
           "consumption_sensor": "Echtzeitsensor für importierte (+) oder exportierte (-) Netzleistung. Aktualisierungen alle 1-2 Sekunden werden empfohlen. Langsamere Sensoren werden akzeptiert, verzögerte Messwerte verringern jedoch die Regelqualität; dem letzten Messwert wird bis zu 65 Sekunden lang gefolgt.",
-          "solar_forecast_sensor": "Sensor, der die Solarproduktionsprognose in kWh liefert (z.B. Solcast). Wenn hier konfiguriert, wird er automatisch für prädiktive Ladung und Solarladungsverzögerung verwendet.",
+          "solar_forecast_sensor": "Veralteter Sensor für die Solarprognose des gesamten Tages. Bestehende Installationen können ihn während der Übergangszeit weiterverwenden; für neue Konfigurationen wird Heute verbleibend empfohlen.",
+          "solar_forecast_remaining_sensor": "Sensor für die heute noch erwartete Solarproduktion in kWh. Beim Speichern ersetzt er die veraltete Ganztagesprognose und wird nicht um die bereits gemessene Produktion reduziert.",
           "solar_production_sensor": "Echtzeit-PV-Produktionsleistungssensor (W/kW) von einem externen Wechselrichter, der nicht über die MPPT-Eingänge der Batterie geführt wird. Wird verwendet, um den Solar-Knoten im Energiefluss-Diagramm des Dashboards anzuzeigen. Leer lassen, wenn deine Module direkt den MPPT der Batterie speisen.",
           "meter_inverted": "Aktivieren Sie diese Option, wenn Ihr Zähler die umgekehrte Konvention verwendet: positiv = Export, negativ = Import. Die Einheit (W/kW) wird automatisch erkannt.",
           "max_contracted_power": "Gesamt-Vertragsleistung in Watt. Das System überschreitet dieses Limit beim Laden nicht, um ein Auslösen der Sicherung zu vermeiden",
@@ -223,7 +229,23 @@
           "battery_6__soc_min": "Batterie 6 — Min. SOC (%)",
           "battery_6__soc_max": "Batterie 6 — Max. SOC (%)",
           "battery_6__max_charge_power_w": "Batterie 6 — Max. Ladeleistung (W)",
-          "battery_6__max_discharge_power_w": "Batterie 6 — Max. Entladeleistung (W)"
+          "battery_6__max_discharge_power_w": "Batterie 6 — Max. Entladeleistung (W)",
+          "battery_7__soc_min": "Batterie 7 — Min. SOC (%)",
+          "battery_7__soc_max": "Batterie 7 — Max. SOC (%)",
+          "battery_7__max_charge_power_w": "Batterie 7 — Max. Ladeleistung (W)",
+          "battery_7__max_discharge_power_w": "Batterie 7 — Max. Entladeleistung (W)",
+          "battery_8__soc_min": "Batterie 8 — Min. SOC (%)",
+          "battery_8__soc_max": "Batterie 8 — Max. SOC (%)",
+          "battery_8__max_charge_power_w": "Batterie 8 — Max. Ladeleistung (W)",
+          "battery_8__max_discharge_power_w": "Batterie 8 — Max. Entladeleistung (W)",
+          "battery_9__soc_min": "Batterie 9 — Min. SOC (%)",
+          "battery_9__soc_max": "Batterie 9 — Max. SOC (%)",
+          "battery_9__max_charge_power_w": "Batterie 9 — Max. Ladeleistung (W)",
+          "battery_9__max_discharge_power_w": "Batterie 9 — Max. Entladeleistung (W)",
+          "battery_10__soc_min": "Batterie 10 — Min. SOC (%)",
+          "battery_10__soc_max": "Batterie 10 — Max. SOC (%)",
+          "battery_10__max_charge_power_w": "Batterie 10 — Max. Ladeleistung (W)",
+          "battery_10__max_discharge_power_w": "Batterie 10 — Max. Entladeleistung (W)"
         },
         "data_description": {
           "soc_min": "Batterie entlädt sich während des Fensters nicht unter diesen SOC (Untergrenze 12%).",
@@ -582,6 +604,13 @@
           "slave_id": "Modbus slave/unit id (default 1)"
         }
       },
+          "reconfigure_battery_huawei_slave": {
+            "title": "Batterie {battery_num} neu konfigurieren — Welcher Wechselrichter?",
+            "description": "An diesem Bus haben {count} Wechselrichter mit Batterie geantwortet. Wähle den, zu dem diese Batterie gehört.",
+            "data": {
+              "slave_id": "Wechselrichter"
+            }
+          },
         "reconfigure_battery_huawei": {
           "title": "Batterie {battery_num} neu konfigurieren — Verbindung (Huawei)",
           "description": "Modbus-Zugang und Huawei-Solar-Batteriegerät für Batterie {battery_num} ändern. Alle übrigen Einstellungen bleiben erhalten.",
@@ -635,7 +664,7 @@
       },
       "battery_connection_huawei": {
         "title": "Batterie {battery_num} einrichten — Verbindung (Huawei)",
-        "description": "Omnibattery liest diese Batterie über Modbus und schickt die Sollwerte über die Huawei-Solar-Integration. Deshalb werden beide Angaben gebraucht: ein Modbus-Zugang und das Batteriegerät. Trage als Modbus-Adresse besser einen Modbus-Proxy ein statt des Wechselrichters selbst — die Huawei-Solar-Integration hält dort bereits eine Verbindung.\n\nEin Huawei-Wechselrichter nimmt jeweils nur EINE Modbus-Verbindung an. Wenn außer Omnibattery noch etwas anderes darauf zugreift — etwa die Huawei-Solar-Integration, evcc oder ein anderes System — brauchst du einen Modbus-Proxy davor, der die Verbindung auf mehrere Clients aufteilt, zum Beispiel https://github.com/Akulatraxas/ha-modbusproxy. Trage dann Adresse und Port des Proxys ein statt die des Wechselrichters. Die Slave-ID wird automatisch gesucht, wenn die eingetragene nicht antwortet.",
+        "description": "Omnibattery liest diese Batterie über Modbus und schickt die Sollwerte über die Huawei-Solar-Integration. Deshalb werden beide Angaben gebraucht: ein Modbus-Zugang und das Batteriegerät. Trage als Modbus-Adresse besser einen Modbus-Proxy ein statt des Wechselrichters selbst — die Huawei-Solar-Integration hält dort bereits eine Verbindung.\n\nEin Huawei-Wechselrichter nimmt jeweils nur EINE Modbus-Verbindung an. Wenn außer Omnibattery noch etwas anderes darauf zugreift — etwa die Huawei-Solar-Integration, evcc oder ein anderes System — brauchst du einen Modbus-Proxy davor, der die Verbindung auf mehrere Clients aufteilt, zum Beispiel {proxy_url}. Trage dann Adresse und Port des Proxys ein statt die des Wechselrichters. Die Slave-ID wird automatisch gesucht, wenn die eingetragene nicht antwortet.",
         "data": {"name": "Name", "host": "IP-Adresse", "port": "Modbus-Port", "slave_id": "Modbus-Slave-ID (leer lassen zum Suchen)", "huawei_battery_device": "Huawei-Solar-Batteriegerät", "huawei_direct_write": "Direkte Modbus-Schreibzugriffe"},
         "data_description": {"name": "Sprechender Name für diese Batterie", "host": "Adresse des Modbus-Proxys oder Wechselrichters, von dem Omnibattery liest", "port": "Modbus-TCP-Port (Standard 502)", "slave_id": "Unit-ID des Wechselrichters — nicht die der EMMA oder einer Wallbox. Leer lassen, dann sucht die Einrichtung sie selbst: sie fragt die üblichen IDs ab, erkennt jeden Wechselrichter an seinem Modellregister und übernimmt den, an dem eine Batterie hängt. Melden sich mehrere — Huawei-Wechselrichter lassen sich kaskadieren — kommt ein Auswahlschritt. Die Suche dauert etwa 15 Sekunden.", "huawei_battery_device": "Nur nötig, wenn direkte Modbus-Schreibzugriffe ausgeschaltet sind — dann laufen die Sollwerte über die Dienste der Huawei-Solar-Integration. Mit direkten Schreibzugriffen bleibt das Feld leer.", "huawei_direct_write": "Sollwerte direkt als Modbus-Register schreiben statt über die Dienste der Huawei-Solar-Integration. Dieselbe Registerfolge, aber ohne Umweg über die Dienstschicht und ohne Wartezeit an deren Kommunikationssperre. Standardmäßig aus — erst einschalten, wenn der bewährte Weg läuft."}
       },
@@ -748,7 +777,8 @@
         "description": "Konfigurieren Sie die von der Integration verwendeten Sensoren.",
         "data": {
           "consumption_sensor": "Netzverbrauchssensor",
-          "solar_forecast_sensor": "Solarprognose-Sensor (optional)",
+          "solar_forecast_sensor": "Solarprognose-Sensor für den gesamten Tag (veraltet)",
+          "solar_forecast_remaining_sensor": "Sensor für die heute verbleibende Solarprognose (empfohlen)",
           "solar_production_sensor": "Solarproduktionssensor (optional)",
           "meter_inverted": "Zählervorzeichen invertiert",
           "max_contracted_power": "Maximale Vertragsleistung (W)",
@@ -756,7 +786,8 @@
         },
         "data_description": {
           "consumption_sensor": "Echtzeitsensor für importierte (+) oder exportierte (-) Netzleistung. Aktualisierungen alle 1-2 Sekunden werden empfohlen. Langsamere Sensoren werden akzeptiert, verzögerte Messwerte verringern jedoch die Regelqualität; dem letzten Messwert wird bis zu 65 Sekunden lang gefolgt.",
-          "solar_forecast_sensor": "Sensor, der die Solarproduktionsprognose in kWh liefert (z.B. Solcast). Wenn hier konfiguriert, wird er automatisch für prädiktive Ladung und Solarladungsverzögerung verwendet.",
+          "solar_forecast_sensor": "Veralteter Sensor für die Solarprognose des gesamten Tages. Bestehende Installationen können ihn während der Übergangszeit weiterverwenden; für neue Konfigurationen wird Heute verbleibend empfohlen.",
+          "solar_forecast_remaining_sensor": "Sensor für die heute noch erwartete Solarproduktion in kWh. Beim Speichern ersetzt er die veraltete Ganztagesprognose und wird nicht um die bereits gemessene Produktion reduziert.",
           "solar_production_sensor": "Echtzeit-PV-Produktionsleistungssensor (W/kW) von einem externen Wechselrichter, der nicht über die MPPT-Eingänge der Batterie geführt wird. Wird verwendet, um den Solar-Knoten im Energiefluss-Diagramm des Dashboards anzuzeigen. Leer lassen, wenn deine Module direkt den MPPT der Batterie speisen.",
           "meter_inverted": "Aktivieren Sie diese Option, wenn Ihr Zähler die umgekehrte Konvention verwendet: positiv = Export, negativ = Import. Die Einheit (W/kW) wird automatisch erkannt.",
           "max_contracted_power": "Gesamt-Vertragsleistung in Watt. Das System überschreitet dieses Limit beim Laden nicht, um ein Auslösen der Sicherung zu vermeiden",
@@ -912,7 +943,23 @@
           "battery_6__soc_min": "Batterie 6 — Min. SOC (%)",
           "battery_6__soc_max": "Batterie 6 — Max. SOC (%)",
           "battery_6__max_charge_power_w": "Batterie 6 — Max. Ladeleistung (W)",
-          "battery_6__max_discharge_power_w": "Batterie 6 — Max. Entladeleistung (W)"
+          "battery_6__max_discharge_power_w": "Batterie 6 — Max. Entladeleistung (W)",
+          "battery_7__soc_min": "Batterie 7 — Min. SOC (%)",
+          "battery_7__soc_max": "Batterie 7 — Max. SOC (%)",
+          "battery_7__max_charge_power_w": "Batterie 7 — Max. Ladeleistung (W)",
+          "battery_7__max_discharge_power_w": "Batterie 7 — Max. Entladeleistung (W)",
+          "battery_8__soc_min": "Batterie 8 — Min. SOC (%)",
+          "battery_8__soc_max": "Batterie 8 — Max. SOC (%)",
+          "battery_8__max_charge_power_w": "Batterie 8 — Max. Ladeleistung (W)",
+          "battery_8__max_discharge_power_w": "Batterie 8 — Max. Entladeleistung (W)",
+          "battery_9__soc_min": "Batterie 9 — Min. SOC (%)",
+          "battery_9__soc_max": "Batterie 9 — Max. SOC (%)",
+          "battery_9__max_charge_power_w": "Batterie 9 — Max. Ladeleistung (W)",
+          "battery_9__max_discharge_power_w": "Batterie 9 — Max. Entladeleistung (W)",
+          "battery_10__soc_min": "Batterie 10 — Min. SOC (%)",
+          "battery_10__soc_max": "Batterie 10 — Max. SOC (%)",
+          "battery_10__max_charge_power_w": "Batterie 10 — Max. Ladeleistung (W)",
+          "battery_10__max_discharge_power_w": "Batterie 10 — Max. Entladeleistung (W)"
         },
         "data_description": {
           "soc_min": "Batterie entlädt sich während des Fensters nicht unter diesen SOC (Untergrenze 12%).",
@@ -1223,7 +1270,7 @@
       },
       "battery_connection_huawei": {
         "title": "Batterie {battery_num} einrichten — Verbindung (Huawei)",
-        "description": "Modbus-Zugang und Huawei-Solar-Batteriegerät für Batterie {battery_num} ändern.\n\nEin Huawei-Wechselrichter nimmt jeweils nur EINE Modbus-Verbindung an. Wenn außer Omnibattery noch etwas anderes darauf zugreift — etwa die Huawei-Solar-Integration, evcc oder ein anderes System — brauchst du einen Modbus-Proxy davor, der die Verbindung auf mehrere Clients aufteilt, zum Beispiel https://github.com/Akulatraxas/ha-modbusproxy. Trage dann Adresse und Port des Proxys ein statt die des Wechselrichters. Die Slave-ID wird automatisch gesucht, wenn die eingetragene nicht antwortet.",
+        "description": "Modbus-Zugang und Huawei-Solar-Batteriegerät für Batterie {battery_num} ändern.\n\nEin Huawei-Wechselrichter nimmt jeweils nur EINE Modbus-Verbindung an. Wenn außer Omnibattery noch etwas anderes darauf zugreift — etwa die Huawei-Solar-Integration, evcc oder ein anderes System — brauchst du einen Modbus-Proxy davor, der die Verbindung auf mehrere Clients aufteilt, zum Beispiel {proxy_url}. Trage dann Adresse und Port des Proxys ein statt die des Wechselrichters. Die Slave-ID wird automatisch gesucht, wenn die eingetragene nicht antwortet.",
         "data": {"name": "Name", "host": "IP-Adresse", "port": "Modbus-Port", "slave_id": "Modbus-Slave-ID (leer lassen zum Suchen)", "huawei_battery_device": "Huawei-Solar-Batteriegerät", "huawei_direct_write": "Direkte Modbus-Schreibzugriffe"},
         "data_description": {"name": "Sprechender Name für diese Batterie", "host": "Adresse des Modbus-Proxys oder Wechselrichters, von dem Omnibattery liest", "port": "Modbus-TCP-Port (Standard 502)", "slave_id": "Unit-ID des Wechselrichters — nicht die der EMMA oder einer Wallbox. Leer lassen, dann sucht die Einrichtung sie selbst: sie fragt die üblichen IDs ab, erkennt jeden Wechselrichter an seinem Modellregister und übernimmt den, an dem eine Batterie hängt. Melden sich mehrere — Huawei-Wechselrichter lassen sich kaskadieren — kommt ein Auswahlschritt. Die Suche dauert etwa 15 Sekunden.", "huawei_battery_device": "Nur nötig, wenn direkte Modbus-Schreibzugriffe ausgeschaltet sind — dann laufen die Sollwerte über die Dienste der Huawei-Solar-Integration. Mit direkten Schreibzugriffen bleibt das Feld leer.", "huawei_direct_write": "Sollwerte direkt als Modbus-Register schreiben statt über die Dienste der Huawei-Solar-Integration. Dieselbe Registerfolge, aber ohne Umweg über die Dienstschicht und ohne Wartezeit an deren Kommunikationssperre. Standardmäßig aus — erst einschalten, wenn der bewährte Weg läuft."}
       },
@@ -1363,6 +1410,9 @@
       "predictive_charging": {
         "name": "Prädiktives Laden"
       },
+      "vacation_mode": {
+        "name": "Urlaubsmodus"
+      },
       "charge_delay": {
         "name": "Ladeverzögerung"
       },
@@ -1480,6 +1530,15 @@
       "system_daily_home_energy": {
         "name": "Täglicher Haushaltsverbrauch"
       },
+      "expected_home_consumption_profile": {
+        "name": "Erwartetes Haushaltsverbrauchsprofil"
+      },
+      "consumption_profile_capture": {
+        "name": "Aktuelle Verbrauchsprofilerfassung"
+      },
+      "daily_operation_timeline": {
+        "name": "Tägliche Betriebslinie"
+      },
       "system_pd_control_quality": {
         "name": "PD-Regelqualität",
         "state": {
@@ -1488,6 +1547,7 @@
           "oscillating": "Schwingend",
           "sluggish": "Träge",
           "battery_limited": "Batteriebegrenzt",
+          "blocked": "Blockiert",
           "collecting_data": "Daten werden gesammelt"
         }
       },
@@ -1593,6 +1653,9 @@
       },
       "total_discharging_energy": {
         "name": "Gesamte Entladeenergie"
+      },
+      "pv_total_generation": {
+        "name": "Gesamte PV-Erzeugung"
       },
       "total_daily_charging_energy": {
         "name": "Tägliche Ladeenergie"
