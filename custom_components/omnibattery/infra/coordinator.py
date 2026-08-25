@@ -61,6 +61,31 @@ def _normalise_power_limit(value) -> int:
         return 0
 
 
+def _stamp_native_daily_reset_dates(coordinator) -> None:
+    """Date-stamp daily energy values a device counts for itself.
+
+    The system totals refuse to add up unless every battery's daily figure is
+    marked as belonging to today — a guard against summing one battery's fresh
+    value with another's from before midnight. Only the derived counter stamps
+    that mark, because until now every driver needed one.
+
+    A driver whose device keeps its own daily counters never gets that sensor,
+    so it never carried the mark, and one such battery in a fleet zeroed the
+    system totals outright: 10.3 kWh charged on one battery and 3.97 on the
+    other, with the overview reading 0.00.
+
+    The value came from this poll, so today is what it belongs to.
+    """
+    if not getattr(coordinator.capabilities, "has_daily_energy_counters", False):
+        return
+    if not coordinator.data:
+        return
+    today = dt_util.now().date().isoformat()
+    for key in ("total_daily_charging_energy", "total_daily_discharging_energy"):
+        if coordinator.data.get(key) is not None:
+            coordinator.data[f"{key}_reset_date"] = today
+
+
 def _sync_device_reported_limits(coordinator) -> None:
     """Adopt the power ceilings the device reports, ignoring a zero.
 
@@ -1154,6 +1179,7 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
         if "min_soc" in self.data:
             self.min_soc = int(self.data["min_soc"])
         _sync_device_reported_limits(self)
+        _stamp_native_daily_reset_dates(self)
 
         if updated_data:
             _LOGGER.debug(

@@ -821,7 +821,7 @@ def _apply_primary_feedforward(controller, new_power, grid_w):
     feedforward = _primary_feedforward_w(controller, grid_w)
     if feedforward > 0:
         if new_power > -feedforward:
-            _LOGGER.debug(
+            _LOGGER.info(
                 "Primary feedforward: raising %.1fW to %.1fW to cover the house load",
                 new_power, -feedforward,
             )
@@ -830,7 +830,7 @@ def _apply_primary_feedforward(controller, new_power, grid_w):
 
     absorbing = _charge_feedforward_w(controller, grid_w)
     if absorbing > 0 and new_power < absorbing:
-        _LOGGER.debug(
+        _LOGGER.info(
             "Primary feedforward: raising %.1fW to %.1fW to take the surplus",
             new_power, absorbing,
         )
