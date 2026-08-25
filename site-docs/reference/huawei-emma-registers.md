@@ -10,7 +10,7 @@ Addresses are holding registers, read with FC03. The EMMA answers on its own
 unit id, the inverter and the charger on theirs; on the reference installation
 that is 0, 4 and 9. Input registers (FC04) are not answered at all.
 
-## The charger cannot be controlled
+## The charger cannot be controlled over Modbus — but it can over OCPP
 
 **There is no writable register for a Huawei charger.** Section 3.3 of the
 specification lists nine registers and every one of them is read-only:
@@ -38,6 +38,25 @@ belong to a charger reached directly rather than through an EMMA.
 
 A charger wired into the EMMA by LAN is reachable only as a Modbus unit behind
 it, so the direct interface — whatever it offers — is not available either.
+
+**The control path is OCPP.** evcc drives this exact model through its
+`ocpp-huawei` template, and the direction of the connection is what makes it
+work: the charger is given a backend URL and dials out to it as an OCPP 1.6J
+client, rather than being polled. Pointed at a listener on the local network —
+`ws://<host>:8887/<stationid>` in evcc's case — it accepts charging-profile
+commands, which is the current limit a battery-aware controller would want to
+set.
+
+Two things to weigh before going that way, neither of them tested here. A
+charger normally holds **one** backend URL, so pointing it at a local listener
+takes it away from wherever it points now. And its surplus charging is decided
+by the EMMA locally, which raises the same question this integration keeps
+meeting elsewhere: two parties deciding the same thing on one meter.
+
+Home Assistant has an OCPP integration that plays the same server role, so the
+charger could be surfaced there as entities without evcc. Nothing in Omnibattery
+does this today, and a charger is a load rather than a battery — it would be a
+separate piece of work, not a driver.
 
 ## The EMMA can be configured
 
