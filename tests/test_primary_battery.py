@@ -620,3 +620,62 @@ def test_the_diagnostics_refresh_themselves():
         source = inspect.getsource(cls.__init__)
         assert "_attr_should_poll = True" in source, cls.__name__
         assert "extra_state_attributes" in inspect.getsource(cls), cls.__name__
+
+
+# ----------------------------------------------------------------------
+# never pump one battery into the other
+#
+# A battery behind the same meter is ordinary household load to another
+# regulator on it, so a charge command is never refused — whatever is asked for
+# gets covered, from the sun if it is there and from the other battery if it is
+# not. The cap at the *uncovered* surplus is what keeps that from happening,
+# and it is easy to mistake for a mere device limit.
+# ----------------------------------------------------------------------
+def test_no_surplus_means_nothing_is_asked_for_however_much_room_there_is():
+    """Both batteries have room; the sun does not. Asking anyway would move
+    energy out of one and into the other through two conversions."""
+    from custom_components.omnibattery import _charge_feedforward_w
+
+    controller = _solar_controller(300, [
+        _battery("Marstek", ac_power=0),       # empty and idle
+        _battery("Huawei", ac_power=250),      # discharging to cover the house
+    ])
+    controller.charge_priority = "Marstek"
+    controller._scarce_solar_latched = False
+    controller._active_charge_batteries = []
+    controller._battery_power_limit = lambda coordinator, is_charging: 2500
+    # Meter at zero, house covered by the other battery: no surplus exists.
+    assert _uncovered_load_w(controller, 0.0) == 250.0
+    assert _charge_feedforward_w(controller, 0.0) == 0.0
+
+
+def test_only_the_uncovered_part_is_claimed_not_the_whole_house():
+    """The other battery's own output must not be counted as available."""
+    from custom_components.omnibattery import _charge_feedforward_w
+
+    controller = _solar_controller(4000, [
+        _battery("Marstek", ac_power=0),
+        _battery("Huawei", ac_power=-1500),    # already absorbing 1500 W
+    ])
+    controller.charge_priority = "Marstek"
+    controller._scarce_solar_latched = False
+    controller._active_charge_batteries = []
+    controller._battery_power_limit = lambda coordinator, is_charging: 2500
+    # Meter exports 2000 W on top of the 1500 W the other battery is taking.
+    assert _uncovered_load_w(controller, -2000.0) == -3500.0
+    # So 3500 W may be claimed — the sum, not the fleet's 5000 W of room.
+    assert _charge_feedforward_w(controller, -2000.0) == 3500.0
+
+
+def test_the_claim_never_exceeds_the_surplus_even_with_room_to_spare():
+    from custom_components.omnibattery import _charge_feedforward_w
+
+    controller = _solar_controller(1000, [
+        _battery("Marstek", ac_power=0),
+        _battery("Huawei", ac_power=0),
+    ])
+    controller.charge_priority = "Marstek"
+    controller._scarce_solar_latched = False
+    controller._active_charge_batteries = []
+    controller._battery_power_limit = lambda coordinator, is_charging: 7000
+    assert _charge_feedforward_w(controller, -400.0) == 400.0

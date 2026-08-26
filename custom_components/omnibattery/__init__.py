@@ -844,6 +844,14 @@ def _charge_feedforward_candidate_w(controller, grid_w) -> float:
     battery receives only its share of its own limit — 2418 W of a 2500 W
     rating on the reference installation, with 6.8 kW of surplus going past it.
     """
+    # The surplus this asks for is the *uncovered* one — what the meter would
+    # read if every battery stopped — and that bound is doing more work than it
+    # looks. A battery behind the same meter is ordinary household load to
+    # another regulator on it, so a charge command is never refused: whatever is
+    # asked for gets covered, from the sun if it is there and from the other
+    # battery if it is not. Asking for more than the real surplus would
+    # therefore pump one battery into the other through two conversions, with
+    # the meter sitting at zero and nothing looking wrong.
     demand = _uncovered_load_w(controller, grid_w)
     if demand is None or demand >= 0:
         return 0.0

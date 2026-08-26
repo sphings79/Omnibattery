@@ -219,7 +219,8 @@ misbehaving first and a test second:
 - The dynamic discharge limit ignores the battery's own contribution.
 - No read group may hold a single key.
 - The inverter's AC total is not published as the battery's AC port.
-- Every form schema survives the serialisation the frontend needs (§13.9).
+- Every form schema survives the serialisation the frontend needs (§13.10).
+- No charge is ever claimed beyond the uncovered surplus (§13.9).
 - Nothing is commanded at all while the strings carry voltage.
 - Shutdown clears the registers over the path the commands took.
 - An unpopulated pack slot produces no entities at all.
@@ -429,7 +430,32 @@ under Omnibattery's control after dark.** During the day it follows its own
 energy manager. An installation whose second battery is AC-coupled still gets
 full control of that one, which is where the surplus can be steered.
 
-### 13.9 A form schema must survive serialisation
+### 13.9 A second battery is household load to the hybrid's manager
+
+Anything drawing power behind the same meter reads as consumption to the
+inverter's energy manager, and a second battery is no exception. That cuts both
+ways, and both matter.
+
+It is why the charge order is enforceable at all. The hybrid itself cannot be
+commanded while the sun is on the panels (§13.8), so it would be easy to assume
+this integration can only stand aside during daylight. It cannot command the
+hybrid — but it can command the AC battery, and the manager has no way to refuse
+that: it sees load and covers it. Ordering the AC battery first is a decision
+that takes effect, not a preference that gets overruled.
+
+It is also the hazard. Whatever is asked for gets covered — from the sun when it
+is there, and **from the hybrid's own battery when it is not**. A charge command
+larger than the real surplus therefore pumps one battery into the other through
+two conversions, while the meter sits at zero and nothing looks wrong. Observed
+before the guard existed: 1391 W of PV over a 529 W house, one battery taking in
+1110 W while the other gave up 205 W, the meter reading 3 W.
+
+The bound that prevents it is the *uncovered* surplus — what the meter would
+read if every battery stopped — rather than the fleet's charging capacity. In
+the code that cap looks like an ordinary device limit, so it is worth naming for
+what it is.
+
+### 13.10 A form schema must survive serialisation
 
 Home Assistant hands the frontend a *serialised* copy of every form schema, and
 not every voluptuous construct has a serialised form. A `vol.Any` in the
