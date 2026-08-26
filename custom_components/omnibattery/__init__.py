@@ -504,50 +504,44 @@ def _apply_driver_dynamic_limit(coordinator, current_limit: int) -> int:
     return max(0, int(dynamic))
 
 
-def _solar_forecast_kwh(controller):
-    """Today's forecast in kWh, or None, honouring the sensor's own unit.
-
-    The setup accepts a forecast reported in either kWh or Wh — it validates
-    exactly those two — so the raw state cannot be read as kWh and left at that.
-    A Wh sensor taken for kWh overstates the day by a factor of a thousand,
-    which here would call every day ample and put the efficient battery last.
-    """
-    entity_id = getattr(controller, "solar_forecast_sensor", None)
-    if not entity_id:
-        return None
-    state = controller.hass.states.get(entity_id)
-    if state is None or state.state in ("unknown", "unavailable", None):
-        return None
-    try:
-        value = float(state.state)
-    except (TypeError, ValueError):
-        return None
-    unit = (state.attributes or {}).get("unit_of_measurement", "")
-    return value / 1000.0 if unit == "Wh" else value
-
-
 def _charge_outlook_kwh(controller):
     """(surplus still expected today, what the batteries still want), in kWh.
 
-    Both sides have to describe the same stretch of day. The forecast sensor
-    reports the whole day and the consumption average likewise, so comparing
-    them raw answers a question about this morning at six in the evening — by
-    which time most of that solar is already on the roof and behind us.
+    Both sides have to describe the same stretch of day. The solar half comes
+    from :func:`read_remaining_solar_kwh`, which is the integration's one
+    normalized answer to "how much is still to come": a provider's remaining
+    figure passes through untouched, a legacy whole-day sensor is converted
+    once, and either unit is handled there. Deriving that here a second time is
+    how a caller ends up subtracting the morning twice.
 
-    So both are cut down to what is left, the way the charge-delay manager
-    already does it: solar by what has actually been produced so far, or failing
-    that by the fraction of the production window elapsed; consumption by the
-    part of its measurement window that still lies ahead.
+    Consumption is cut down the same way — to the part of its measurement
+    window still ahead — because a whole-day average against a remaining
+    forecast tilts every afternoon towards scarcity.
 
     Returns None while any input is missing, which means "no opinion" rather
     than "scarce".
     """
     tracker = getattr(controller, "_consumption_tracker", None)
-    forecast_today = _solar_forecast_kwh(controller)
-    if tracker is None or forecast_today is None:
+    if tracker is None:
         return None
-
     now = dt_util.now()
+    try:
+        # One clock for both halves: the reader has its own, and left to itself
+        # it can convert the solar side against a different minute than the
+        # consumption side is trimmed to.
+        solar = read_remaining_solar_kwh(controller.hass, controller, now=now)
+    except Exception:  # noqa: BLE001
+        return None
+    # "fallback"/"unsafe_zero" is how that module says it had nothing usable to
+    # read. Taking the 0 kWh at face value would call every day scarce.
+    if (
+        solar is None
+        or getattr(solar, "source", None) in (None, "fallback")
+        or getattr(solar, "conversion", None) == "unsafe_zero"
+    ):
+        return None
+    remaining_solar = solar.remaining_kwh
+
     now_h = now.hour + now.minute / 60.0
     t_end = None
     estimate_t_end = getattr(tracker, "estimate_t_end", None)
@@ -557,25 +551,8 @@ def _charge_outlook_kwh(controller):
         except Exception:  # noqa: BLE001
             t_end = None
 
-    produced = getattr(controller, "_daily_solar_energy_kwh", 0.0) or 0.0
-    if produced > 0:
-        # What the roof has actually made beats any curve fitted to the clock.
-        remaining_solar = max(0.0, forecast_today - produced)
-    else:
-        fraction_done = 0.0
-        get_fraction = getattr(tracker, "get_solar_fraction_done", None)
-        if callable(get_fraction) and t_end is not None:
-            try:
-                fraction_done = float(
-                    get_fraction(now_h, getattr(controller, "_solar_t_start", None), t_end)
-                )
-            except Exception:  # noqa: BLE001
-                fraction_done = 0.0
-        remaining_solar = forecast_today * max(0.0, min(1.0, 1.0 - fraction_done))
-
     avg_daily = tracker.get_avg_daily_consumption()
     remaining_consumption = avg_daily
-    window_per_day = None
     get_window = getattr(tracker, "get_consumption_window_hours_per_day", None)
     hours_in_range = getattr(tracker, "consumption_window_hours_in_range", None)
     if callable(get_window) and callable(hours_in_range) and t_end is not None:

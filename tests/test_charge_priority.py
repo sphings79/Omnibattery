@@ -351,13 +351,26 @@ def test_a_forecast_in_watt_hours_is_not_taken_for_kilowatt_hours():
     assert wanted == pytest.approx(20.0)
 
 
-def test_a_sensor_without_a_unit_is_read_as_kilowatt_hours():
-    """What the documented configuration asks for, and the older readers assume."""
-    surplus, _ = _outlook(
-        forecast=30.0, unit="", avg_consumption=20.0,
-        produced_kwh=0.01, hours_ahead=24.0,
+def test_a_sensor_with_no_unit_at_all_is_read_as_kilowatt_hours(monkeypatch):
+    """The documented configuration, and what the shared reader assumes."""
+    from custom_components.omnibattery import _charge_outlook_kwh
+    import custom_components.omnibattery as mod
+
+    # At the start of the production window nothing is behind us yet.
+    monkeypatch.setattr(
+        mod.dt_util, "now",
+        lambda: datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc),
     )
-    assert surplus == pytest.approx(9.99, abs=0.02)
+    batteries = [_battery("Marstek", capacity=10.0, soc=0, limit_w=2500)]
+    controller = _controller(batteries, forecast=30.0, avg_consumption=20.0,
+                             hours_ahead=0.0)
+    controller.hass.states.get = lambda _eid: SimpleNamespace(state="30.0", attributes={})
+    assert _charge_outlook_kwh(controller)[0] == pytest.approx(30.0)
+
+
+def test_a_foreign_unit_is_refused_rather_than_guessed_at():
+    """Neither kWh nor Wh: the shared reader declines, and so does the outlook."""
+    assert _outlook(forecast=30.0, unit="MWh", avg_consumption=20.0) is None
 
 
 def test_production_already_on_the_roof_is_taken_off_the_forecast():
@@ -400,7 +413,7 @@ def test_the_same_forecast_says_less_as_the_day_goes_on(monkeypatch):
     # Half the production window gone: 15 kWh left against 3 kWh still to use.
     assert at_two == pytest.approx(12.0, abs=0.5)
     # An hour before sunset there is almost nothing left to plan with.
-    assert at_seven < 4.0
+    assert at_seven == pytest.approx(2.0, abs=0.5)
 
 
 def test_no_forecast_sensor_yields_no_opinion():
@@ -416,3 +429,48 @@ def test_an_unreadable_forecast_yields_no_opinion():
         state="unavailable", attributes={}
     )
     assert _charge_outlook_kwh(controller) is None
+
+
+def test_a_remaining_forecast_sensor_is_taken_as_it_stands():
+    """It already answers the question; subtracting production would count the
+    morning twice, and the integration nags for exactly this sensor."""
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    batteries = [_battery("Marstek", capacity=10.0, soc=0, limit_w=2500)]
+    controller = _controller(
+        batteries, forecast=8.0, avg_consumption=12.0,
+        produced_kwh=15.0, hours_ahead=0.0,
+    )
+    controller.solar_forecast_remaining_sensor = "sensor.remaining"
+    controller.hass.states.get = lambda eid: SimpleNamespace(
+        state="8.0" if eid == "sensor.remaining" else "23.0",
+        attributes={"unit_of_measurement": "kWh"},
+    )
+    # 15 kWh already produced today is not deducted from the 8 kWh still to come.
+    assert _charge_outlook_kwh(controller)[0] == pytest.approx(8.0)
+
+
+def test_a_remaining_sensor_in_watt_hours_is_converted_too():
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    batteries = [_battery("Marstek", capacity=10.0, soc=0, limit_w=2500)]
+    controller = _controller(
+        batteries, forecast=8.0, avg_consumption=12.0, hours_ahead=0.0,
+    )
+    controller.solar_forecast_remaining_sensor = "sensor.remaining"
+    controller.hass.states.get = lambda eid: SimpleNamespace(
+        state="8000", attributes={"unit_of_measurement": "Wh"}
+    )
+    assert _charge_outlook_kwh(controller)[0] == pytest.approx(8.0)
+
+
+def test_without_a_remaining_sensor_the_whole_day_figure_is_trimmed():
+    """The legacy path, which is what most installations still have."""
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    batteries = [_battery("Marstek", capacity=10.0, soc=0, limit_w=2500)]
+    controller = _controller(
+        batteries, forecast=23.0, avg_consumption=12.0,
+        produced_kwh=15.0, hours_ahead=0.0,
+    )
+    assert _charge_outlook_kwh(controller)[0] == pytest.approx(8.0)
