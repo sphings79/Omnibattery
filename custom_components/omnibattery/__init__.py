@@ -564,16 +564,41 @@ def _charge_outlook_kwh(controller):
         except Exception:  # noqa: BLE001
             remaining_consumption = avg_daily
 
+    # What the day is measured against is the room in the battery the scarce
+    # branch concentrates into — the DC-coupled one — and not the room in the
+    # whole fleet. Measuring against the fleet asks "is there enough to fill
+    # everything", which on a mixed installation is almost never true, so every
+    # day came out scarce and the AC-coupled battery was passed over on all of
+    # them. Its own empty capacity was most of what made the day look scarce,
+    # which made the rule feed itself: the emptier that battery got, the more
+    # certain it was to be skipped again, and it sat at its floor for days.
+    #
+    # Once the surplus is more than the DC battery can hold there is nothing
+    # left to concentrate — the excess has to go somewhere else anyway — so the
+    # day stops being scarce at exactly the point the preference stops paying.
+    # This also retires the DC battery from the front on its own as it fills:
+    # its room shrinks towards zero, the day turns ample, and the order hands
+    # over without anyone having to command the hybrid to step aside.
     wanted = 0.0
+    dc_room = 0.0
+    dc_coupled_present = False
     for coordinator in getattr(controller, "coordinators", []):
-        remaining = _battery_remaining_kwh(coordinator)
-        if remaining:
-            wanted += remaining
-    return remaining_solar - remaining_consumption, wanted
+        remaining = _battery_remaining_kwh(coordinator) or 0.0
+        wanted += remaining
+        if getattr(getattr(coordinator, "driver", None), "dc_coupled", False):
+            dc_coupled_present = True
+            dc_room += remaining
+    threshold = dc_room if dc_coupled_present else wanted
+    return remaining_solar - remaining_consumption, threshold
 
 
 def _scarce_solar_day(controller) -> bool:
-    """Whether today's sun is not expected to fill every battery.
+    """Whether today's sun is worth concentrating in one battery.
+
+    True while the expected surplus still fits in the battery the charge order
+    would concentrate it into — the DC-coupled one where present. Beyond that
+    the excess has to be shared out regardless, and there is nothing to gain by
+    keeping the other batteries waiting.
 
     Latched: a forecast wanders all day, and without a band the charge order
     would follow it. Unknown outlook leaves the standing verdict alone.
@@ -600,6 +625,10 @@ def _charge_order(controller, batteries) -> list:
 
     Scarce sun: the DC-coupled one first, because the kilowatt-hours that do
     arrive are worth putting where the least of them is lost to conversion.
+    "Scarce" here means the surplus still fits in that battery — see
+    :func:`_scarce_solar_day`. Once it no longer does, the day counts as ample
+    and the longest-to-fill goes first, which is how the surplus reaches an
+    AC-coupled battery without the hybrid ever being told to stand down.
 
     A nominated battery overrides both.
     """

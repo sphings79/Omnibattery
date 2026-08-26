@@ -161,7 +161,7 @@ def test_a_wandering_forecast_does_not_reshuffle_the_order():
         _battery("Huawei", capacity=10.0, soc=0, limit_w=7000, dc_coupled=True),
     ]
     controller = _controller(
-        batteries, forecast=41.0, avg_consumption=20.0,
+        batteries, forecast=31.0, avg_consumption=20.0,
         produced_kwh=0.01, hours_ahead=24.0,
     )
 
@@ -170,15 +170,17 @@ def test_a_wandering_forecast_does_not_reshuffle_the_order():
             state=str(value), attributes={"unit_of_measurement": "kWh"}
         )
 
-    # Wants 20 kWh, expects 21: ample, but only just.
+    # The measure is the hybrid's 10 kWh of room, not the fleet's 20. Against
+    # 20 kWh of consumption a 31 kWh forecast leaves 11: ample, but only just.
+    controller.hass.states.get = _forecast(31.0)
     assert _scarce_solar_day(controller) is False
 
-    for forecast in (40.5, 39.5, 40.0, 39.0):
+    for forecast in (30.5, 29.5, 30.0, 29.0):
         controller.hass.states.get = _forecast(forecast)
         assert _scarce_solar_day(controller) is False, forecast
 
     # Clearly short of the need, by more than the band: now it flips.
-    controller.hass.states.get = _forecast(30.0)
+    controller.hass.states.get = _forecast(20.0)
     assert _scarce_solar_day(controller) is True
 
 
@@ -348,7 +350,9 @@ def test_a_forecast_in_watt_hours_is_not_taken_for_kilowatt_hours():
         produced_kwh=0.01, hours_ahead=24.0,
     )
     assert surplus_kwh == pytest.approx(surplus_wh)
-    assert wanted == pytest.approx(20.0)
+    # The hybrid's room, which is what scarcity is measured against — the pair
+    # holds 20 kWh between them.
+    assert wanted == pytest.approx(10.0)
 
 
 def test_a_sensor_with_no_unit_at_all_is_read_as_kilowatt_hours(monkeypatch):
@@ -474,3 +478,112 @@ def test_without_a_remaining_sensor_the_whole_day_figure_is_trimmed():
         produced_kwh=15.0, hours_ahead=0.0,
     )
     assert _charge_outlook_kwh(controller)[0] == pytest.approx(8.0)
+
+
+# --- What the day is measured against -------------------------------------
+#
+# The scarce branch concentrates the surplus in the DC-coupled battery. The
+# question "is today scarce" therefore has to be asked about that battery's
+# room, not about the fleet's. Asked about the fleet it answers "yes" on almost
+# every mixed installation, and the AC-coupled battery is passed over for good.
+
+def _order(controller, batteries):
+    from custom_components.omnibattery import _charge_order
+
+    return [c.name for c in _charge_order(controller, batteries)]
+
+
+def test_a_day_is_scarce_only_while_the_surplus_fits_the_dc_battery():
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    batteries = [
+        _battery("Marstek", capacity=15.36, soc=12, limit_w=2500),
+        _battery("Huawei", capacity=13.8, soc=89, limit_w=7000, dc_coupled=True),
+    ]
+    controller = _controller(batteries, forecast=10.0, avg_consumption=12.0,
+                             hours_ahead=0.0)
+    # 1.5 kWh of room in the hybrid; the Marstek's 13.5 kWh is not the measure.
+    assert _charge_outlook_kwh(controller)[1] == pytest.approx(1.52, abs=0.05)
+
+
+def test_the_reference_installation_stops_calling_every_day_scarce():
+    """Huawei at 89 %, Marstek at 12 %, 10 kWh of sun still ahead.
+
+    The live case: measured against the fleet's 15 kWh of room this came out
+    scarce, so the hybrid went first and the Marstek took 0.02 kWh in a day.
+    """
+    from custom_components.omnibattery import _scarce_solar_day
+
+    batteries = [
+        _battery("Marstek", capacity=15.36, soc=12, limit_w=2500),
+        _battery("Huawei", capacity=13.8, soc=89, limit_w=7000, dc_coupled=True),
+    ]
+    controller = _controller(batteries, forecast=10.0, avg_consumption=12.0,
+                             hours_ahead=0.0)
+    assert _scarce_solar_day(controller) is False
+    # Ample: longest to fill goes first, which is how the Marstek gets served
+    # without the hybrid ever being commanded to stand down.
+    assert _order(controller, batteries)[0] == "Marstek"
+
+
+def test_a_genuinely_thin_day_still_fills_the_hybrid_first():
+    """Less sun than the hybrid alone can hold: concentrate, don't split."""
+    from custom_components.omnibattery import _scarce_solar_day
+
+    batteries = [
+        _battery("Marstek", capacity=15.36, soc=12, limit_w=2500),
+        _battery("Huawei", capacity=13.8, soc=30, limit_w=7000, dc_coupled=True),
+    ]
+    # 4 kWh ahead against 9.7 kWh of room in the hybrid.
+    controller = _controller(batteries, forecast=4.0, avg_consumption=12.0,
+                             hours_ahead=0.0)
+    assert _scarce_solar_day(controller) is True
+    assert _order(controller, batteries)[0] == "Huawei"
+
+
+def test_an_empty_ac_battery_cannot_make_the_day_scarce_by_itself():
+    """The trap that kept the Marstek at its floor.
+
+    Its own empty capacity was most of what made the day look scarce, so the
+    emptier it got the more certain it was to be skipped again.
+    """
+    from custom_components.omnibattery import _scarce_solar_day
+
+    full_hybrid = _battery("Huawei", capacity=13.8, soc=98, limit_w=7000,
+                           dc_coupled=True)
+    for soc in (50, 20, 5):
+        batteries = [_battery("Marstek", capacity=15.36, soc=soc, limit_w=2500),
+                     full_hybrid]
+        controller = _controller(batteries, forecast=6.0, avg_consumption=12.0,
+                                 hours_ahead=0.0)
+        assert _scarce_solar_day(controller) is False, f"bei SOC {soc}"
+
+
+def test_the_hybrid_hands_over_as_it_fills():
+    """No command to the hybrid is needed — its shrinking room does it."""
+    from custom_components.omnibattery import _scarce_solar_day
+
+    seen = []
+    for soc in (10, 50, 95):
+        batteries = [
+            _battery("Marstek", capacity=15.36, soc=12, limit_w=2500),
+            _battery("Huawei", capacity=13.8, soc=soc, limit_w=7000,
+                     dc_coupled=True),
+        ]
+        controller = _controller(batteries, forecast=9.0, avg_consumption=12.0,
+                                 hours_ahead=0.0)
+        _scarce_solar_day(controller)
+        seen.append(_order(controller, batteries)[0])
+    assert seen == ["Huawei", "Huawei", "Marstek"]
+
+
+def test_without_a_dc_battery_the_whole_fleet_is_still_the_measure():
+    from custom_components.omnibattery import _charge_outlook_kwh
+
+    batteries = [
+        _battery("A", capacity=10.0, soc=0, limit_w=2500),
+        _battery("B", capacity=10.0, soc=50, limit_w=2500),
+    ]
+    controller = _controller(batteries, forecast=8.0, avg_consumption=12.0,
+                             hours_ahead=0.0)
+    assert _charge_outlook_kwh(controller)[1] == pytest.approx(15.0)
